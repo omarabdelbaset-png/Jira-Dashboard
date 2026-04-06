@@ -3,21 +3,41 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import os
 from jira import JIRA
 
-st.set_page_config(page_title="Jira Service Desk Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
-st.markdown('<style>.stMetric { background-color: #f8f9fa; border-radius: 8px; padding: 12px; } div[data-testid="metric-container"] { background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; padding: 16px; }</style>', unsafe_allow_html=True)
+st.set_page_config(
+    page_title="Jira Service Desk Dashboard", 
+    page_icon="📊", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
 
+st.markdown("""
+<style>
+    .stMetric { background-color: #f8f9fa; border-radius: 8px; padding: 12px; }
+    div[data-testid="metric-container"] {
+        background-color: #f8f9fa; border: 1px solid #e9ecef;
+        border-radius: 8px; padding: 16px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# --- CONFIGURATION & SECRETS ---
+# ==========================================
 JIRA_SERVER = "https://itsupportsivision.atlassian.net"
 FILE_NAME = "Jira Service Desk (8).csv"
 
 try:
-    JIRA_EMAIL, JIRA_TOKEN = st.secrets["JIRA_EMAIL"], st.secrets["JIRA_API_TOKEN"]
+    JIRA_EMAIL = st.secrets["JIRA_EMAIL"]
+    JIRA_TOKEN = st.secrets["JIRA_API_TOKEN"]
 except:
     JIRA_EMAIL, JIRA_TOKEN = None, None
 
+# ==========================================
+# --- HELPER FUNCTIONS ---
+# ==========================================
 def parse_hhmm(val):
     try:
         parts = str(val).strip().split(":")
@@ -28,7 +48,11 @@ def parse_sla_to_hhmm(sla_obj):
     if not sla_obj: return ""
     if isinstance(sla_obj, str) and ":" in sla_obj: return sla_obj
     try:
-        cycle = sla_obj.get('completedCycles', [{}])[-1] if isinstance(sla_obj, dict) and 'completedCycles' in sla_obj and sla_obj['completedCycles'] else sla_obj.get('ongoingCycle', {})
+        if isinstance(sla_obj, dict) and 'completedCycles' in sla_obj and sla_obj['completedCycles']:
+            cycle = sla_obj['completedCycles'][-1]
+        else:
+            cycle = sla_obj.get('ongoingCycle', {})
+            
         if cycle:
             mins = cycle.get('remainingTime', {}).get('millis', 0) / 60000.0
             if cycle.get('breached', False) and mins > 0: mins = -mins
@@ -49,11 +73,15 @@ def parse_req(req_obj):
         if '/' in req_obj: return req_obj.split('/')[-1].replace('-', ' ').title()
         return req_obj
     if isinstance(req_obj, dict):
-        if 'requestType' in req_obj and isinstance(req_obj['requestType'], dict): return req_obj['requestType'].get('name', "")
+        if 'requestType' in req_obj and isinstance(req_obj['requestType'], dict): 
+            return req_obj['requestType'].get('name', "")
         return req_obj.get('name', req_obj.get('value', req_obj.get('currentValue', "")))
     if isinstance(req_obj, list) and len(req_obj) > 0: return parse_req(req_obj[0])
     return str(req_obj)
 
+# ==========================================
+# --- DATA FETCHER ---
+# ==========================================
 @st.cache_data(ttl=600)
 def load_data():
     df_raw, is_live, error_msg = pd.DataFrame(), False, None
@@ -69,26 +97,42 @@ def load_data():
                         if n in f['name'].lower(): return f['id']
                 return None
                 
-            tfr_id, ttr_id, sat_id = get_id(['time to first response']), get_id(['time to resolution']), get_id(['satisfaction', 'satisfaction rating'])
+            tfr_id = get_id(['time to first response'])
+            ttr_id = get_id(['time to resolution'])
+            sat_id = get_id(['satisfaction', 'satisfaction rating'])
             req_id = get_id(['customer request type', 'request type', 'portal request type'])
 
-            fetch_fields = ['status', 'priority', 'assignee', 'created', 'resolutiondate', 'updated', 'issuetype', 'resolution', 'reporter', 'summary', 'customfield_10010']
+            fetch_fields = [
+                'status', 'priority', 'assignee', 'created', 'resolutiondate', 
+                'updated', 'issuetype', 'resolution', 'reporter', 'summary', 'customfield_10010'
+            ]
             for cid in [tfr_id, ttr_id, sat_id, req_id]:
                 if cid and cid not in fetch_fields: fetch_fields.append(cid)
             
             data = []
-            for issue in jira.enhanced_search_issues('project = SVF ORDER BY created DESC', maxResults=False, fields=','.join(fetch_fields)):
+            issues = jira.enhanced_search_issues(
+                'project = SVF ORDER BY created DESC', maxResults=False, fields=','.join(fetch_fields)
+            )
+            
+            for issue in issues:
                 raw = issue.raw['fields']
                 status_str = str(issue.fields.status)
-                stat_cat = 'Done' if 'Done' in status_str or 'Resolved' in status_str else ('In Progress' if 'Progress' in status_str else 'To Do')
+                
+                if 'Done' in status_str or 'Resolved' in status_str: stat_cat = 'Done'
+                elif 'Progress' in status_str: stat_cat = 'In Progress'
+                else: stat_cat = 'To Do'
                     
                 req_val = raw.get(req_id) if req_id else None
                 if not req_val: req_val = raw.get('customfield_10010')
                 extracted_req = parse_req(req_val)
-                if not extracted_req or extracted_req.lower() == "unknown": extracted_req = str(issue.fields.issuetype) if hasattr(issue.fields, 'issuetype') and issue.fields.issuetype else "Unknown"
+                if not extracted_req or extracted_req.lower() == "unknown": 
+                    extracted_req = str(issue.fields.issuetype) if hasattr(issue.fields, 'issuetype') and issue.fields.issuetype else "Unknown"
 
                 data.append({
-                    'Issue key': issue.key, 'Summary': issue.fields.summary, 'Status': status_str, 'Status Category': stat_cat,
+                    'Issue key': issue.key, 
+                    'Summary': issue.fields.summary, 
+                    'Status': status_str, 
+                    'Status Category': stat_cat,
                     'Priority': str(issue.fields.priority) if hasattr(issue.fields, 'priority') and issue.fields.priority else 'None',
                     'Assignee': str(issue.fields.assignee) if hasattr(issue.fields, 'assignee') and issue.fields.assignee else 'Unassigned',
                     'Reporter': str(issue.fields.reporter) if hasattr(issue.fields, 'reporter') and issue.fields.reporter else 'Unknown',
@@ -100,7 +144,7 @@ def load_data():
                     'Custom field (Time to first response)': parse_sla_to_hhmm(raw.get(tfr_id)) if tfr_id else "", 
                     'Custom field (Time to resolution)': parse_sla_to_hhmm(raw.get(ttr_id)) if ttr_id else "",
                     'Satisfaction rating': parse_sat(raw.get(sat_id)) if sat_id else None,
-                    'Custom field (Request Type).1': extracted_req,
+                    'Request Type': extracted_req,
                     'Custom field ([CHART] Date of First Response)': pd.to_datetime(issue.fields.created).strftime("%d/%b/%y %I:%M %p") if issue.fields.created else None
                 })
             df_raw, is_live = pd.DataFrame(data), True
@@ -112,20 +156,28 @@ def load_data():
 
     if not df_raw.empty:
         df = df_raw.copy()
-        for col in ["Created", "Resolved", "Updated"]: df[f"{col}_dt"] = pd.to_datetime(df[col], format="%d/%b/%y %I:%M %p", errors="coerce")
+        if "Custom field (Request Type).1" in df.columns and "Request Type" not in df.columns:
+            df["Request Type"] = df["Custom field (Request Type).1"].fillna("Unknown")
+            
+        for col in ["Created", "Resolved", "Updated"]: 
+            df[f"{col}_dt"] = pd.to_datetime(df[col], format="%d/%b/%y %I:%M %p", errors="coerce")
+            
         df["YearMonth"] = df["Created_dt"].dt.to_period("M").astype(str)
         df["Week"] = df["Created_dt"].dt.to_period("W").astype(str)
         df["DayOfWeek"] = df["Created_dt"].dt.day_name()
         df["Hour"], df["Year"], df["Month"] = df["Created_dt"].dt.hour, df["Created_dt"].dt.year, df["Created_dt"].dt.month_name()
-        df["TFR_remaining_min"], df["TTR_remaining_min"] = df["Custom field (Time to first response)"].apply(parse_hhmm), df["Custom field (Time to resolution)"].apply(parse_hhmm)
-        df["TFR_remaining_hrs"], df["TTR_remaining_hrs"] = df["TFR_remaining_min"] / 60, df["TTR_remaining_min"] / 60
+        df["TFR_remaining_min"] = df["Custom field (Time to first response)"].apply(parse_hhmm)
+        df["TTR_remaining_min"] = df["Custom field (Time to resolution)"].apply(parse_hhmm)
         df["TFR_met"] = df["TFR_remaining_min"].apply(lambda x: "Met" if pd.notna(x) and x >= 0 else ("Breached" if pd.notna(x) else None))
         df["TTR_met"] = df["TTR_remaining_min"].apply(lambda x: "Met" if pd.notna(x) and x >= 0 else ("Breached" if pd.notna(x) else None))
         df["Satisfaction"] = pd.to_numeric(df["Satisfaction rating"], errors="coerce") if "Satisfaction rating" in df.columns else np.nan
-        df["Request Type"] = df["Custom field (Request Type).1"].fillna("Unknown") if "Custom field (Request Type).1" in df.columns else "Unknown"
+        
         return df, is_live, error_msg
     return df_raw, is_live, error_msg
 
+# ==========================================
+# --- APP INIT ---
+# ==========================================
 with st.spinner("Connecting to Jira and loading dashboard..."):
     df_raw, is_live, error_msg = load_data()
 
@@ -133,27 +185,49 @@ if df_raw.empty:
     st.error(f"⚠️ Data could not be loaded. Error: {error_msg}")
     st.stop()
 
+# ==========================================
+# --- SIDEBAR FILTERS ---
+# ==========================================
 st.sidebar.title("🔍 Filters")
-if is_live: st.sidebar.success(f"🟢 Live Data Active\nLoaded {len(df_raw)} tickets.")
-else: st.sidebar.warning(f"🟡 Using Offline CSV Data\n{error_msg or ''}")
+if is_live: 
+    st.sidebar.success(f"🟢 Live Data Active\nLoaded {len(df_raw)} tickets.")
+else: 
+    st.sidebar.warning(f"🟡 Using Offline CSV Data\n{error_msg or ''}")
 
 sel_status = st.sidebar.multiselect("Status", sorted(df_raw["Status"].dropna().unique()), default=sorted(df_raw["Status"].dropna().unique()))
 sel_priority = st.sidebar.multiselect("Priority", sorted(df_raw["Priority"].dropna().unique()), default=sorted(df_raw["Priority"].dropna().unique()))
 sel_type = st.sidebar.multiselect("Issue Type", sorted(df_raw["Issue Type"].dropna().unique()), default=sorted(df_raw["Issue Type"].dropna().unique()))
 sel_assignee = st.sidebar.multiselect("Assignee", sorted(df_raw["Assignee"].dropna().unique()), default=sorted(df_raw["Assignee"].dropna().unique()))
 
-min_d, max_d = (df_raw["Created_dt"].min().date(), df_raw["Created_dt"].max().date()) if not df_raw["Created_dt"].isna().all() else (pd.Timestamp.now().date(), pd.Timestamp.now().date())
+if not df_raw["Created_dt"].isna().all():
+    min_d, max_d = df_raw["Created_dt"].min().date(), df_raw["Created_dt"].max().date()
+else:
+    min_d, max_d = pd.Timestamp.now().date(), pd.Timestamp.now().date()
+    
 date_range = st.sidebar.date_input("Date Range", value=[min_d, max_d], min_value=min_d, max_value=max_d)
 if len(date_range) == 1: date_range = (date_range[0], date_range[0])
 
-df = df_raw[df_raw["Status"].isin(sel_status) & df_raw["Priority"].isin(sel_priority) & df_raw["Issue Type"].isin(sel_type) & df_raw["Assignee"].isin(sel_assignee) & (df_raw["Created_dt"].dt.date >= date_range[0]) & (df_raw["Created_dt"].dt.date <= date_range[1])]
+df = df_raw[
+    df_raw["Status"].isin(sel_status) & 
+    df_raw["Priority"].isin(sel_priority) & 
+    df_raw["Issue Type"].isin(sel_type) & 
+    df_raw["Assignee"].isin(sel_assignee) & 
+    (df_raw["Created_dt"].dt.date >= date_range[0]) & 
+    (df_raw["Created_dt"].dt.date <= date_range[1])
+]
 
+# ==========================================
+# --- DASHBOARD LAYOUT ---
+# ==========================================
 st.title("📊 Jira Service Desk Dashboard")
 st.caption(f"Showing **{len(df):,}** tickets from {date_range[0]} to {date_range[1]}")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Overview", "🎫 Ticket Analysis", "🚦 SLA Performance", "⭐ Satisfaction", "📅 Trends & Raw Data"])
 PCOLOR = {"Critical": "#EF553B", "High": "#FFA15A", "Medium": "#636EFA", "Low": "#00CC96"}
 
+# ------------------------------------------
+# TAB 1: OVERVIEW
+# ------------------------------------------
 with tab1:
     st.subheader("Key Metrics")
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -166,75 +240,28 @@ with tab1:
 
     s1, s2, s3, s4 = st.columns(4)
     _ttr, _tfr, _sat = df[df["TTR_met"].notna()], df[df["TFR_met"].notna()], df[df["Satisfaction"].notna()]
-    s1.metric("Resolution SLA Met", f"{100 * (_ttr['TTR_met'] == 'Met').mean() if len(_ttr) else 0:.1f}%", delta=f"-{int((_ttr['TTR_met'] == 'Breached').sum()):,} breached", delta_color="inverse")
-    s2.metric("First Response SLA Met", f"{100 * (_tfr['TFR_met'] == 'Met').mean() if len(_tfr) else 0:.1f}%", delta=f"-{int((_tfr['TFR_met'] == 'Breached').sum()):,} breached", delta_color="inverse")
-    s3.metric("Avg Satisfaction", f"{_sat['Satisfaction'].mean() if len(_sat) else 0:.2f} / 5", delta=f"{len(_sat):,} ratings")
+    
+    ttr_met_pct = 100 * (_ttr["TTR_met"] == "Met").mean() if len(_ttr) else 0
+    tfr_met_pct = 100 * (_tfr["TFR_met"] == "Met").mean() if len(_tfr) else 0
+    avg_sat = _sat["Satisfaction"].mean() if len(_sat) else 0
+    
+    s1.metric("Resolution SLA Met", f"{ttr_met_pct:.1f}%", delta=f"-{int((_ttr['TTR_met'] == 'Breached').sum()):,} breached", delta_color="inverse")
+    s2.metric("First Response SLA Met", f"{tfr_met_pct:.1f}%", delta=f"-{int((_tfr['TFR_met'] == 'Breached').sum()):,} breached", delta_color="inverse")
+    s3.metric("Avg Satisfaction", f"{avg_sat:.2f} / 5", delta=f"{len(_sat):,} ratings")
     s4.metric("5-Star Ratings", f"{int((_sat['Satisfaction'] == 5).sum()):,}", delta=f"{100*int((_sat['Satisfaction'] == 5).sum())/len(_sat):.1f}% of rated" if len(_sat) else "0%")
 
     st.divider()
     ov1, ov2, ov3, ov4 = st.columns(4)
-    with ov1: st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number+delta", value=100 * (_ttr['TTR_met'] == 'Met').mean() if len(_ttr) else 0, title={"text": "Res SLA Met %"}, gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#00CC96"}, "threshold": {"line": {"color": "orange", "width": 3}, "value": 80}})).update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-    with ov2: st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number+delta", value=100 * (_tfr['TFR_met'] == 'Met').mean() if len(_tfr) else 0, title={"text": "FR SLA Met %"}, gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#00CC96"}, "threshold": {"line": {"color": "orange", "width": 3}, "value": 80}})).update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-    with ov3: st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=_sat['Satisfaction'].mean() if len(_sat) else 0, title={"text": "Avg Score"}, gauge={"axis": {"range": [1, 5]}, "bar": {"color": "#636EFA"}})).update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-    with ov4:
-        if len(_sat) > 0:
-            sd = _sat["Satisfaction"].value_counts().sort_index().reset_index(); sd.columns = ["Score", "Count"]; sd["Label"] = sd["Score"].astype(int).astype(str) + " ⭐"
-            st.plotly_chart(px.bar(sd, x="Label", y="Count", color="Score", color_continuous_scale=[[0, "#EF553B"], [0.5, "#FECB52"], [1.0, "#00CC96"]]).update_layout(coloraxis_showscale=False, showlegend=False, margin=dict(l=0, r=0, t=30, b=0), height=220), use_container_width=True)
-
-    st.divider()
-    col1, col2 = st.columns(2)
-    with col1: st.plotly_chart(px.bar(df["Status"].value_counts().reset_index(name="Count"), x="Count", y="Status", orientation="h", color="Status", color_discrete_map={"Open": "#EF553B", "In Progress": "#FFA15A", "Resolved": "#00CC96", "Closed": "#636EFA", "Canceled": "#AB63FA"}, text="Count").update_traces(textposition="outside").update_layout(showlegend=False, margin=dict(l=0, r=20, t=10, b=0)), use_container_width=True)
-    with col2: st.plotly_chart(px.pie(df["Priority"].value_counts().reset_index(name="Count"), names="Priority", values="Count", hole=0.45, color="Priority", color_discrete_map=PCOLOR).update_traces(textinfo="label+percent+value").update_layout(margin=dict(l=0, r=0, t=10, b=0)), use_container_width=True)
-
-    st.subheader("Resolution Breakdown & Volume")
-    rc1, rc2 = st.columns(2)
-    with rc1: st.plotly_chart(px.pie(df["Resolution"].fillna("Unresolved").value_counts().reset_index(name="Count"), names="Resolution", values="Count", hole=0.45).update_traces(textinfo="label+percent+value").update_layout(margin=dict(l=0, r=0, t=10, b=0)), use_container_width=True)
-    with rc2:
-        m_cr = df.groupby("YearMonth").size().reset_index(name="Tickets")
-        m_res = df[df["Resolved_dt"].notna()].copy()
-        m_res["RM"] = m_res["Resolved_dt"].dt.to_period("M").astype(str)
-        comb = m_cr.merge(m_res.groupby("RM").size().reset_index(name="Resolved"), left_on="YearMonth", right_on="RM", how="left").fillna(0)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=comb["YearMonth"], y=comb["Tickets"], mode="lines+markers", name="Created", line=dict(color="#636EFA", width=2)))
-        fig.add_trace(go.Scatter(x=comb["YearMonth"], y=comb["Resolved"], mode="lines+markers", name="Resolved", line=dict(color="#00CC96", width=2)))
-        st.plotly_chart(fig.update_layout(xaxis_tickangle=-45, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", y=1.1)), use_container_width=True)with tab2:
-    st.subheader("Request Type Distribution")
-    rt = df["Request Type"].value_counts().reset_index(name="Count").sort_values(by="Count", ascending=True)
-    st.plotly_chart(px.bar(rt.tail(20), x="Count", y="Request Type", orientation="h", color="Count", color_continuous_scale="Blues", text="Count").update_traces(textposition="outside").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=20, t=10, b=0)), use_container_width=True)
-
-    c1, c2 = st.columns(2)
-    with c1: st.plotly_chart(px.imshow(df.groupby(["Priority", "Status"]).size().unstack(fill_value=0).reindex([p for p in ["Critical", "High", "Medium", "Low"] if p in df["Priority"].unique()]), text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Priority × Status").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-    with c2: st.plotly_chart(px.imshow(df.groupby(["Issue Type", "Priority"]).size().unstack(fill_value=0), text_auto=True, color_continuous_scale="Blues", aspect="auto", title="Issue Type × Priority").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-
-    c3, c4 = st.columns(2)
-    with c3: st.plotly_chart(px.bar(df["DayOfWeek"].value_counts().reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).fillna(0).reset_index(name="Count"), x="DayOfWeek", y="Count", color="Count", color_continuous_scale="Purples", text="Count", title="Tickets by Day").update_traces(textposition="outside").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-    with c4: st.plotly_chart(px.bar(df["Hour"].value_counts().sort_index().reset_index(name="Count"), x="Hour", y="Count", color="Count", color_continuous_scale="Teal", text="Count", title="Tickets by Hour").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-
-    if "Status Category" in df.columns:
-        st.plotly_chart(px.area(df.groupby(["YearMonth", "Status Category"]).size().reset_index(name="Count"), x="YearMonth", y="Count", color="Status Category", color_discrete_map={"Done": "#00CC96", "In Progress": "#FFA15A", "To Do": "#636EFA"}, title="Status Category Over Time").update_layout(xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-
-with tab3:
-    tfr_all, ttr_all = df[df["TFR_met"].notna()], df[df["TTR_met"].notna()]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("FR SLA Met", f"{100 * (tfr_all['TFR_met'] == 'Met').mean() if len(tfr_all) else 0:.1f}%")
-    c2.metric("FR SLA Breached", f"{100 * (tfr_all['TFR_met'] == 'Breached').mean() if len(tfr_all) else 0:.1f}%")
-    c3.metric("Res SLA Met", f"{100 * (ttr_all['TTR_met'] == 'Met').mean() if len(ttr_all) else 0:.1f}%")
-    c4.metric("Res SLA Breached", f"{100 * (ttr_all['TTR_met'] == 'Breached').mean() if len(ttr_all) else 0:.1f}%")
     
-    with st.expander("🔎 View Breached Tickets"):
-        b_df = tfr_all[tfr_all["TFR_met"] == "Breached"] if st.radio("Show breaches for", ["First Response SLA", "Resolution Time SLA"], horizontal=True) == "First Response SLA" else ttr_all[ttr_all["TTR_met"] == "Breached"]
-        st.dataframe(b_df[["Issue key", "Summary", "Status", "Priority", "Assignee", "Created"]].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
-
-with tab4:
-    if len(_sat) > 0:
-        c1, c2 = st.columns(2)
-        with c1: st.plotly_chart(px.bar(_sat["Satisfaction"].value_counts().sort_index().reset_index(name="Count"), x="Satisfaction", y="Count", text="Count", title="Score Distribution").update_traces(textposition="outside").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-        with c2: st.plotly_chart(px.bar(_sat.groupby("Priority")["Satisfaction"].mean().reset_index(name="Avg"), x="Priority", y="Avg", color="Priority", color_discrete_map=PCOLOR, text=np.round(_sat.groupby("Priority")["Satisfaction"].mean(), 2), title="CSAT by Priority").update_traces(textposition="outside").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-    else: st.info("No satisfaction ratings available.")
-
-with tab5:
-    st.subheader("📋 Raw Data Explorer")
-    search = st.text_input("Search in Summary", "")
-    disp = df[df["Summary"].fillna("").str.contains(search, case=False)] if search else df
-    cols = st.multiselect("Columns", ["Issue key", "Summary", "Status", "Priority", "Assignee", "Created", "Resolution", "TTR_met", "TFR_met", "Satisfaction", "Request Type"], default=["Issue key", "Summary", "Status", "Priority", "Assignee", "Created", "Request Type"])
-    st.dataframe(disp[cols].sort_values("Created", ascending=False).head(1000), use_container_width=True, hide_index=True)
+    with ov1: 
+        fig = go.Figure(go.Indicator(mode="gauge+number+delta", value=ttr_met_pct, title={"text": "Res SLA Met %"}, gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#00CC96"}, "threshold": {"line": {"color": "orange", "width": 3}, "value": 80}}))
+        fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with ov2: 
+        fig = go.Figure(go.Indicator(mode="gauge+number+delta", value=tfr_met_pct, title={"text": "FR SLA Met %"}, gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#00CC96"}, "threshold": {"line": {"color": "orange", "width": 3}, "value": 80}}))
+        fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with ov3: 
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=avg_sat, title={"text": "Avg Score"}, gauge={"axis": {"range": [1, 5]}, "bar": {"color":
