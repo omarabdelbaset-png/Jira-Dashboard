@@ -264,4 +264,160 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
         
     with ov3: 
-        fig = go.Figure(go.Indicator(mode="gauge+number", value=avg_sat, title={"text": "Avg Score"}, gauge={"axis": {"range": [1, 5]}, "bar": {"color":
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=avg_sat, title={"text": "Avg Score"}, gauge={"axis": {"range": [1, 5]}, "bar": {"color": "#636EFA"}}))
+        fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with ov4:
+        if len(_sat) > 0:
+            sd = _sat["Satisfaction"].value_counts().sort_index().reset_index()
+            sd.columns = ["Score", "Count"]
+            sd["Label"] = sd["Score"].astype(int).astype(str) + " ⭐"
+            fig = px.bar(sd, x="Label", y="Count", color="Score", color_continuous_scale=[[0, "#EF553B"], [0.5, "#FECB52"], [1.0, "#00CC96"]])
+            fig.update_layout(coloraxis_showscale=False, showlegend=False, margin=dict(l=0, r=0, t=30, b=0), height=220)
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1: 
+        st.subheader("Tickets by Status")
+        sc = df["Status"].value_counts().reset_index()
+        sc.columns = ["Status", "Count"]
+        fig = px.bar(sc, x="Count", y="Status", orientation="h", color="Status", color_discrete_map={"Open": "#EF553B", "In Progress": "#FFA15A", "Resolved": "#00CC96", "Closed": "#636EFA", "Canceled": "#AB63FA"}, text="Count")
+        fig.update_traces(textposition="outside")
+        fig.update_layout(showlegend=False, margin=dict(l=0, r=20, t=10, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with col2: 
+        st.subheader("Tickets by Priority")
+        pc = df["Priority"].value_counts().reset_index()
+        pc.columns = ["Priority", "Count"]
+        fig = px.pie(pc, names="Priority", values="Count", hole=0.45, color="Priority", color_discrete_map=PCOLOR)
+        fig.update_traces(textinfo="label+percent+value")
+        fig.update_layout(margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Resolution Breakdown & Volume")
+    rc1, rc2 = st.columns(2)
+    with rc1: 
+        rc = df["Resolution"].fillna("Unresolved").value_counts().reset_index()
+        rc.columns = ["Resolution", "Count"]
+        fig = px.pie(rc, names="Resolution", values="Count", hole=0.45)
+        fig.update_traces(textinfo="label+percent+value")
+        fig.update_layout(margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with rc2:
+        m_cr = df.groupby("YearMonth").size().reset_index(name="Tickets")
+        m_res = df[df["Resolved_dt"].notna()].copy()
+        m_res["RM"] = m_res["Resolved_dt"].dt.to_period("M").astype(str)
+        m_res_grp = m_res.groupby("RM").size().reset_index(name="Resolved")
+        comb = m_cr.merge(m_res_grp, left_on="YearMonth", right_on="RM", how="left").fillna(0)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=comb["YearMonth"], y=comb["Tickets"], mode="lines+markers", name="Created", line=dict(color="#636EFA", width=2)))
+        fig.add_trace(go.Scatter(x=comb["YearMonth"], y=comb["Resolved"], mode="lines+markers", name="Resolved", line=dict(color="#00CC96", width=2)))
+        fig.update_layout(xaxis_tickangle=-45, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig, use_container_width=True)
+
+# ------------------------------------------
+# TAB 2: TICKET ANALYSIS
+# ------------------------------------------
+with tab2:
+    st.subheader("Request Type Distribution")
+    rt = df["Request Type"].value_counts().reset_index()
+    rt.columns = ["Request Type", "Count"]
+    rt = rt.sort_values(by="Count", ascending=True)
+    fig = px.bar(rt.tail(20), x="Count", y="Request Type", orientation="h", color="Count", color_continuous_scale="Blues", text="Count")
+    fig.update_traces(textposition="outside")
+    fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=20, t=10, b=0))
+    st.plotly_chart(fig, use_container_width=True)
+
+    c1, c2 = st.columns(2)
+    with c1: 
+        piv = df.groupby(["Priority", "Status"]).size().unstack(fill_value=0)
+        piv = piv.reindex([p for p in ["Critical", "High", "Medium", "Low"] if p in df["Priority"].unique()])
+        fig = px.imshow(piv, text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Priority × Status")
+        fig.update_layout(margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with c2: 
+        piv2 = df.groupby(["Issue Type", "Priority"]).size().unstack(fill_value=0)
+        fig = px.imshow(piv2, text_auto=True, color_continuous_scale="Blues", aspect="auto", title="Issue Type × Priority")
+        fig.update_layout(margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3: 
+        dow = df["DayOfWeek"].value_counts().reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).fillna(0).reset_index()
+        dow.columns = ["DayOfWeek", "Count"]
+        fig = px.bar(dow, x="DayOfWeek", y="Count", color="Count", color_continuous_scale="Purples", text="Count", title="Tickets by Day")
+        fig.update_traces(textposition="outside")
+        fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with c4: 
+        hc = df["Hour"].value_counts().sort_index().reset_index()
+        hc.columns = ["Hour", "Count"]
+        fig = px.bar(hc, x="Hour", y="Count", color="Count", color_continuous_scale="Teal", text="Count", title="Tickets by Hour")
+        fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+    if "Status Category" in df.columns:
+        sc_time = df.groupby(["YearMonth", "Status Category"]).size().reset_index()
+        sc_time.columns = ["YearMonth", "Status Category", "Count"]
+        fig = px.area(sc_time, x="YearMonth", y="Count", color="Status Category", color_discrete_map={"Done": "#00CC96", "In Progress": "#FFA15A", "To Do": "#636EFA"}, title="Status Category Over Time")
+        fig.update_layout(xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+# ------------------------------------------
+# TAB 3: SLA
+# ------------------------------------------
+with tab3:
+    tfr_all, ttr_all = df[df["TFR_met"].notna()], df[df["TTR_met"].notna()]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("FR SLA Met", f"{100 * (tfr_all['TFR_met'] == 'Met').mean() if len(tfr_all) else 0:.1f}%")
+    c2.metric("FR SLA Breached", f"{100 * (tfr_all['TFR_met'] == 'Breached').mean() if len(tfr_all) else 0:.1f}%")
+    c3.metric("Res SLA Met", f"{100 * (ttr_all['TTR_met'] == 'Met').mean() if len(ttr_all) else 0:.1f}%")
+    c4.metric("Res SLA Breached", f"{100 * (ttr_all['TTR_met'] == 'Breached').mean() if len(ttr_all) else 0:.1f}%")
+    
+    with st.expander("🔎 View Breached Tickets"):
+        b_df = tfr_all[tfr_all["TFR_met"] == "Breached"] if st.radio("Show breaches for", ["First Response SLA", "Resolution Time SLA"], horizontal=True) == "First Response SLA" else ttr_all[ttr_all["TTR_met"] == "Breached"]
+        st.dataframe(b_df[["Issue key", "Summary", "Status", "Priority", "Assignee", "Created"]].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
+
+# ------------------------------------------
+# TAB 4: SATISFACTION
+# ------------------------------------------
+with tab4:
+    if len(_sat) > 0:
+        c1, c2 = st.columns(2)
+        with c1: 
+            sd2 = _sat["Satisfaction"].value_counts().sort_index().reset_index()
+            sd2.columns = ["Satisfaction", "Count"]
+            fig = px.bar(sd2, x="Satisfaction", y="Count", text="Count", title="Score Distribution")
+            fig.update_traces(textposition="outside")
+            fig.update_layout(margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with c2: 
+            sp = _sat.groupby("Priority")["Satisfaction"].mean().reset_index()
+            sp.columns = ["Priority", "Avg"]
+            fig = px.bar(sp, x="Priority", y="Avg", color="Priority", color_discrete_map=PCOLOR, text=np.round(sp["Avg"], 2), title="CSAT by Priority")
+            fig.update_traces(textposition="outside")
+            fig.update_layout(margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+    else: 
+        st.info("No satisfaction ratings available.")
+
+# ------------------------------------------
+# TAB 5: TRENDS & RAW DATA
+# ------------------------------------------
+with tab5:
+    st.subheader("📋 Raw Data Explorer")
+    search = st.text_input("Search in Summary", "")
+    disp = df[df["Summary"].fillna("").str.contains(search, case=False)] if search else df
+    cols = st.multiselect(
+        "Columns", 
+        ["Issue key", "Summary", "Status", "Priority", "Assignee", "Created", "Resolution", "TTR_met", "TFR_met", "Satisfaction", "Request Type"], 
+        default=["Issue key", "Summary", "Status", "Priority", "Assignee", "Created", "Request Type"]
+    )
+    st.dataframe(disp[cols].sort_values("Created", ascending=False).head(1000), use_container_width=True, hide_index=True)
