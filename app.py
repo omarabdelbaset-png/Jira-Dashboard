@@ -42,8 +42,8 @@ def load_data():
             
             # Loop to fetch ALL historical tickets quickly
             while True:
-                # OPTIMIZATION: We ONLY download the data we need, skipping giant comments/descriptions!
-                issues = jira.search_issues(
+                # FIXED: Using the new "enhanced_search_issues" required by Jira Cloud
+                issues = jira.enhanced_search_issues(
                     'project = SVF ORDER BY created DESC', 
                     startAt=start_at, 
                     maxResults=max_results,
