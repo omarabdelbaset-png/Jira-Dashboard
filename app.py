@@ -19,6 +19,9 @@ try:
 except:
     JIRA_EMAIL, JIRA_TOKEN = None, None
 
+# ==========================================
+# --- HELPER FUNCTIONS ---
+# ==========================================
 def parse_hhmm(val):
     try:
         parts = str(val).strip().split(":")
@@ -55,6 +58,9 @@ def parse_req(req_obj):
     if isinstance(req_obj, list) and len(req_obj) > 0: return parse_req(req_obj[0])
     return str(req_obj)
 
+# ==========================================
+# --- DATA FETCHER ---
+# ==========================================
 @st.cache_data(ttl=600)
 def load_data():
     df_raw, is_live, error_msg = pd.DataFrame(), False, None
@@ -157,6 +163,12 @@ st.caption(f"Showing **{len(df):,}** tickets from {date_range[0]} to {date_range
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Overview", "🎫 Ticket Analysis", "🚦 SLA Performance", "⭐ Satisfaction", "📅 Trends & Raw Data"])
 
+def make_gauge(val, title, max_val=100, ref=80, color="#00CC96"):
+    opts = dict(mode="gauge+number+delta" if ref else "gauge+number", value=val, title={"text": title}, number={"suffix": " / 5" if max_val==5 else "%", "font": {"size": 28}})
+    if ref: opts["delta"] = {"reference": ref, "suffix": f" vs {ref} target", "relative": False}
+    opts["gauge"] = {"axis": {"range": [1 if max_val==5 else 0, max_val]}, "bar": {"color": color}, "threshold": {"line": {"color": "orange", "width": 3}, "value": ref}}
+    st.plotly_chart(go.Figure(go.Indicator(**opts)).update_layout(height=220, margin=dict(l=10,r=10,t=30,b=10)), use_container_width=True)
+
 # === TAB 1: OVERVIEW ===
 with tab1:
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -180,42 +192,28 @@ with tab1:
 
     st.divider()
     ov1, ov2, ov3, ov4 = st.columns(4)
-    with ov1: 
-        fig = go.Figure(go.Indicator(mode="gauge+number+delta", value=ttr_met_pct, title={"text": "Res SLA Met %"}, gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#00CC96"}, "threshold": {"line": {"color": "orange", "width": 3}, "value": 80}}))
-        st.plotly_chart(fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-    with ov2: 
-        fig = go.Figure(go.Indicator(mode="gauge+number+delta", value=tfr_met_pct, title={"text": "FR SLA Met %"}, gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#00CC96"}, "threshold": {"line": {"color": "orange", "width": 3}, "value": 80}}))
-        st.plotly_chart(fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
-    with ov3: 
-        fig = go.Figure(go.Indicator(mode="gauge+number", value=avg_sat, title={"text": "Avg Score"}, gauge={"axis": {"range": [1, 5]}, "bar": {"color": "#636EFA"}}))
-        st.plotly_chart(fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10)), use_container_width=True)
+    with ov1: make_gauge(ttr_met_pct, "Resolution SLA", 100, 80, "#00CC96" if ttr_met_pct >= 80 else "#EF553B")
+    with ov2: make_gauge(tfr_met_pct, "First Response SLA", 100, 80, "#00CC96" if tfr_met_pct >= 80 else "#EF553B")
+    with ov3: make_gauge(avg_sat, "Satisfaction Score", 5, 4, "#636EFA")
     with ov4:
+        st.subheader("Satisfaction Ratings")
         if len(_sat) > 0:
-            sd = _sat["Satisfaction"].value_counts().sort_index().reset_index()
-            sd.columns = ["Score", "Count"]
-            sd["Label"] = sd["Score"].astype(int).astype(str) + " ⭐"
-            fig = px.bar(sd, x="Label", y="Count", color="Score", color_continuous_scale=[[0, "#EF553B"], [0.5, "#FECB52"], [1.0, "#00CC96"]])
-            st.plotly_chart(fig.update_layout(coloraxis_showscale=False, showlegend=False, margin=dict(l=0, r=0, t=30, b=0), height=220), use_container_width=True)
+            sd = _sat["Satisfaction"].value_counts().sort_index().reset_index(name="Count")
+            sd["Label"] = sd["Satisfaction"].astype(int).astype(str) + " ⭐"
+            st.plotly_chart(px.bar(sd, x="Label", y="Count", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.5, "#FECB52"], [1.0, "#00CC96"]]).update_layout(coloraxis_showscale=False, showlegend=False, margin=dict(l=0, r=0, t=30, b=0), height=220, xaxis_title="", yaxis_title=""), use_container_width=True)
 
     st.divider()
     col1, col2 = st.columns(2)
     with col1: 
-        sc = df["Status"].value_counts().reset_index()
-        sc.columns = ["Status", "Count"]
-        fig = px.bar(sc, x="Count", y="Status", orientation="h", color="Status", color_discrete_map={"Open": "#EF553B", "In Progress": "#FFA15A", "Resolved": "#00CC96", "Closed": "#636EFA", "Canceled": "#AB63FA"}, text="Count", title="Tickets by Status")
-        st.plotly_chart(fig.update_traces(textposition="outside").update_layout(showlegend=False, margin=dict(l=0, r=20, t=30, b=0)), use_container_width=True)
+        sc = df["Status"].value_counts().reset_index(name="Count")
+        st.plotly_chart(px.bar(sc, x="Count", y="Status", orientation="h", color="Status", color_discrete_map={"Open": "#EF553B", "In Progress": "#FFA15A", "Resolved": "#00CC96", "Closed": "#636EFA", "Canceled": "#AB63FA"}, text="Count", title="Tickets by Status").update_traces(textposition="outside").update_layout(showlegend=False, margin=dict(l=0, r=20, t=10, b=0)), use_container_width=True)
     with col2: 
-        pc = df["Priority"].value_counts().reset_index()
-        pc.columns = ["Priority", "Count"]
-        fig = px.pie(pc, names="Priority", values="Count", hole=0.45, color="Priority", color_discrete_map=PCOLOR, title="Tickets by Priority")
-        st.plotly_chart(fig.update_traces(textinfo="label+percent+value").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        pc = df["Priority"].value_counts().reset_index(name="Count")
+        st.plotly_chart(px.pie(pc, names="Priority", values="Count", hole=0.45, color="Priority", color_discrete_map=PCOLOR, title="Tickets by Priority").update_traces(textinfo="label+percent+value").update_layout(margin=dict(l=0, r=0, t=10, b=0)), use_container_width=True)
 
     rc1, rc2 = st.columns(2)
     with rc1: 
-        rc = df["Resolution"].fillna("Unresolved").value_counts().reset_index()
-        rc.columns = ["Resolution", "Count"]
-        fig = px.pie(rc, names="Resolution", values="Count", hole=0.45, title="Resolution Breakdown")
-        st.plotly_chart(fig.update_traces(textinfo="label+percent+value").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        st.plotly_chart(px.pie(df["Resolution"].fillna("Unresolved").value_counts().reset_index(name="Count"), names="Resolution", values="Count", hole=0.45, title="Resolution Breakdown").update_traces(textinfo="label+percent+value").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
     with rc2:
         m_cr = df.groupby("YearMonth").size().reset_index(name="Tickets")
         m_res = df[df["Resolved_dt"].notna()].copy()
@@ -228,39 +226,50 @@ with tab1:
 
 # === TAB 2: TICKET ANALYSIS ===
 with tab2:
-    rt = df["Request Type"].value_counts().reset_index()
-    rt.columns = ["Request Type", "Count"]
-    fig = px.bar(rt.sort_values(by="Count", ascending=True).tail(20), x="Count", y="Request Type", orientation="h", color="Count", color_continuous_scale="Blues", text="Count", title="Request Type Distribution")
-    st.plotly_chart(fig.update_traces(textposition="outside").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=20, t=30, b=0)), use_container_width=True)
+    rt = df["Request Type"].value_counts().reset_index(name="Count").sort_values(by="Count", ascending=True)
+    st.plotly_chart(px.bar(rt.tail(20), x="Count", y="Request Type", orientation="h", color="Count", color_continuous_scale="Blues", text="Count", title="Request Type Distribution").update_traces(textposition="outside").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=20, t=30, b=0)), use_container_width=True)
 
     c1, c2 = st.columns(2)
     with c1: 
         piv = df.groupby(["Priority", "Status"]).size().unstack(fill_value=0).reindex([p for p in ["Critical", "High", "Medium", "Low"] if p in df["Priority"].unique()])
-        fig = px.imshow(piv, text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Priority × Status Heatmap")
-        st.plotly_chart(fig.update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        st.plotly_chart(px.imshow(piv, text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Priority × Status Heatmap").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
     with c2: 
-        fig = px.imshow(df.groupby(["Issue Type", "Priority"]).size().unstack(fill_value=0), text_auto=True, color_continuous_scale="Blues", aspect="auto", title="Issue Type × Priority")
-        st.plotly_chart(fig.update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        st.plotly_chart(px.imshow(df.groupby(["Issue Type", "Priority"]).size().unstack(fill_value=0), text_auto=True, color_continuous_scale="Blues", aspect="auto", title="Issue Type × Priority").update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3: 
-        dow = df["DayOfWeek"].value_counts().reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).fillna(0).reset_index()
-        dow.columns = ["DayOfWeek", "Count"]
-        fig = px.bar(dow, x="DayOfWeek", y="Count", color="Count", color_continuous_scale="Purples", text="Count", title="Tickets by Day of Week")
-        st.plotly_chart(fig.update_traces(textposition="outside").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        dow = df["DayOfWeek"].value_counts().reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).fillna(0).reset_index(name="Count")
+        st.plotly_chart(px.bar(dow, x="DayOfWeek", y="Count", color="Count", color_continuous_scale="Purples", text="Count", title="Tickets by Day of Week").update_traces(textposition="outside").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
     with c4: 
-        hc = df["Hour"].value_counts().sort_index().reset_index()
-        hc.columns = ["Hour", "Count"]
-        fig = px.bar(hc, x="Hour", y="Count", color="Count", color_continuous_scale="Teal", text="Count", title="Tickets by Hour of Day")
-        st.plotly_chart(fig.update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        hc = df["Hour"].value_counts().sort_index().reset_index(name="Count")
+        st.plotly_chart(px.bar(hc, x="Hour", y="Count", color="Count", color_continuous_scale="Teal", text="Count", title="Tickets by Hour of Day").update_layout(coloraxis_showscale=False, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
 
     if "Status Category" in df.columns:
-        sc_time = df.groupby(["YearMonth", "Status Category"]).size().reset_index()
-        sc_time.columns = ["YearMonth", "Status Category", "Count"]
-        fig = px.area(sc_time, x="YearMonth", y="Count", color="Status Category", color_discrete_map={"Done": "#00CC96", "In Progress": "#FFA15A", "To Do": "#636EFA"}, title="Status Category Over Time")
-        st.plotly_chart(fig.update_layout(xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        sc_time = df.groupby(["YearMonth", "Status Category"]).size().reset_index(name="Count")
+        st.plotly_chart(px.area(sc_time, x="YearMonth", y="Count", color="Status Category", color_discrete_map={"Done": "#00CC96", "In Progress": "#FFA15A", "To Do": "#636EFA"}, title="Status Category Over Time").update_layout(xaxis_tickangle=-45, margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
 
 # === TAB 3: SLA PERFORMANCE ===
+def plot_sla_bar(df_sla, col_met, title):
+    p = df_sla.groupby(["Priority", col_met]).size().reset_index(name="C").pivot(index="Priority", columns=col_met, values="C").fillna(0).reset_index().set_index("Priority").reindex([x for x in ["Critical", "High", "Medium", "Low"] if x in df_sla["Priority"].unique()]).reset_index()
+    f = go.Figure()
+    if "Met" in p.columns: f.add_trace(go.Bar(name="Met", x=p["Priority"], y=p["Met"], marker_color="#00CC96", text=p["Met"].astype(int), textposition="inside"))
+    if "Breached" in p.columns: f.add_trace(go.Bar(name="Breached", x=p["Priority"], y=p["Breached"], marker_color="#EF553B", text=p["Breached"].astype(int), textposition="inside"))
+    st.plotly_chart(f.update_layout(title=title, barmode="stack", margin=dict(l=0,r=0,t=30,b=0), legend=dict(orientation="h", y=1.1)), use_container_width=True)
+
+def plot_sla_trend(df_sla, col_met, title, color_line):
+    d = df_sla.copy(); d["Mo"] = d["Created_dt"].dt.to_period("M").astype(str)
+    m = d.groupby("Mo")[col_met].apply(lambda x: 100*(x=="Met").sum()/len(x)).reset_index(name="Pct").merge(d.groupby("Mo").size().reset_index(name="C"), on="Mo")
+    f = make_subplots(specs=[[{"secondary_y": True}]])
+    f.add_trace(go.Bar(x=m["Mo"], y=m["C"], name="Tickets", marker_color="#c7e8c7" if color_line=="#00CC96" else "#f5c6c6", opacity=0.6), secondary_y=False)
+    f.add_trace(go.Scatter(x=m["Mo"], y=m["Pct"], mode="lines+markers", name="Met %", line=dict(color=color_line, width=2)), secondary_y=True)
+    f.add_hline(y=80, line_dash="dash", line_color="orange", annotation_text="80% target", secondary_y=True)
+    st.plotly_chart(f.update_layout(title=title, xaxis_tickangle=-45, margin=dict(l=0,r=0,t=30,b=0), legend=dict(orientation="h", y=1.1)), use_container_width=True)
+
+def plot_breach(df_sla, col_met, group_col, title, colors):
+    d = df_sla[df_sla[col_met]=="Breached"].groupby(group_col).size().sort_values().tail(15).reset_index(name="B")
+    f = px.bar(d, x="B", y=group_col, orientation="h", color="B", color_continuous_scale=colors, text="B", title=title)
+    st.plotly_chart(f.update_traces(textposition="outside").update_layout(coloraxis_showscale=False, margin=dict(l=0,r=20,t=30,b=0)), use_container_width=True)
+
 with tab3:
     tfr_all, ttr_all = df[df["TFR_met"].notna()], df[df["TTR_met"].notna()]
     
@@ -275,18 +284,6 @@ with tab3:
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        fig = px.pie(tfr_all["TFR_met"].value_counts().reset_index(name="Count"), names="TFR_met", values="Count", hole=0.5, color="TFR_met", color_discrete_map={"Met": "#00CC96", "Breached": "#EF553B"}, title="First Response SLA — Met vs Breached")
-        st.plotly_chart(fig.update_traces(textinfo="label+percent+value", pull=[0.05, 0]).update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
+        st.plotly_chart(px.pie(tfr_all["TFR_met"].value_counts().reset_index(name="Count"), names="TFR_met", values="Count", hole=0.5, color="TFR_met", color_discrete_map={"Met": "#00CC96", "Breached": "#EF553B"}, title="First Response SLA — Met vs Breached").update_traces(textinfo="label+percent+value", pull=[0.05, 0]).update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
     with col2:
-        fig = px.pie(ttr_all["TTR_met"].value_counts().reset_index(name="Count"), names="TTR_met", values="Count", hole=0.5, color="TTR_met", color_discrete_map={"Met": "#00CC96", "Breached": "#EF553B"}, title="Resolution Time SLA — Met vs Breached")
-        st.plotly_chart(fig.update_traces(textinfo="label+percent+value", pull=[0.05, 0]).update_layout(margin=dict(l=0, r=0, t=30, b=0)), use_container_width=True)
-
-    col3, col4 = st.columns(2)
-    with col3:
-        tfr_pivot = tfr_all.groupby(["Priority", "TFR_met"]).size().reset_index(name="Count").pivot(index="Priority", columns="TFR_met", values="Count").fillna(0).reset_index().set_index("Priority").reindex([p for p in ["Critical", "High", "Medium", "Low"] if p in tfr_all["Priority"].unique()]).reset_index()
-        fig = go.Figure()
-        if "Met" in tfr_pivot.columns: fig.add_trace(go.Bar(name="Met", x=tfr_pivot["Priority"], y=tfr_pivot.get("Met", []), marker_color="#00CC96", text=tfr_pivot.get("Met", []).astype(int), textposition="inside"))
-        if "Breached" in tfr_pivot.columns: fig.add_trace(go.Bar(name="Breached", x=tfr_pivot["Priority"], y=tfr_pivot.get("Breached", []), marker_color="#EF553B", text=tfr_pivot.get("Breached", []).astype(int), textposition="inside"))
-        st.plotly_chart(fig.update_layout(title="First Response SLA by Priority", barmode="stack", margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.1)), use_container_width=True)
-    with col4:
-        ttr_pivot = ttr_
+        st.plotly_chart(px.pie(ttr_all["TTR_met"].value_counts().reset_index(name="Count"), names="TTR_met", values="Count", hole=0.5, color="TTR_met", color_discrete_map={"Met": "#00CC96", "Breached": "#EF553B"}, title="Resolution Time SLA — Met vs Breached").update_traces(textinfo="label+percent+value", pull=[0.05, 0]).update_layout(margin=
