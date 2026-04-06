@@ -54,6 +54,7 @@ def load():
                     'Status Category': 'Done' if 'Done' in stt or 'Resolved' in stt else ('In Progress' if 'Progress' in stt else 'To Do'),
                     'Priority': str(i.fields.priority) if getattr(i.fields,'priority',None) else 'None',
                     'Assignee': str(i.fields.assignee) if getattr(i.fields,'assignee',None) else 'Unassigned',
+                    'Reporter': str(i.fields.reporter) if getattr(i.fields,'reporter',None) else 'Unknown',
                     'Issue Type': str(i.fields.issuetype) if getattr(i.fields,'issuetype',None) else 'Unknown',
                     'Resolution': str(i.fields.resolution) if getattr(i.fields,'resolution',None) else 'Unresolved',
                     'Created': pd.to_datetime(i.fields.created).strftime("%d/%b/%y %I:%M %p") if i.fields.created else None,
@@ -87,7 +88,6 @@ def load():
 with st.spinner("Loading Dashboard..."): df_raw, live, err = load()
 if df_raw.empty: st.error(f"Error: {err}"); st.stop()
 
-# Helpers for Plotly compression
 m0 = dict(l=0, r=0, t=30, b=0)
 def pc(fig, out=False):
     if out: fig.update_traces(textposition="outside")
@@ -134,11 +134,13 @@ with t1:
     with o2: pc(gauge(tfr_p, "FR SLA %", 100, "#00CC96" if tfr_p>=80 else "#EF553B"))
     with o3: pc(gauge(s_avg, "Avg Score", 5, "#636EFA"))
     with o4:
-        if len(sat): nl(px.bar(sat["Satisfaction"].value_counts().reset_index(name="C").assign(L=lambda x: x["Satisfaction"].astype(int).astype(str)+" ⭐"), x="L", y="C", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.5, "#FECB52"], [1.0, "#00CC96"]], title="Scores").update_layout(coloraxis_showscale=False))
+        st.subheader("Satisfaction Ratings")
+        if len(sat): nl(px.bar(sat["Satisfaction"].value_counts().reset_index(name="C").assign(L=lambda x: x["Satisfaction"].astype(int).astype(str)+" ⭐"), x="L", y="C", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.5, "#FECB52"], [1.0, "#00CC96"]]).update_layout(coloraxis_showscale=False, xaxis_title="", yaxis_title=""))
 
+    st.divider()
     c1, c2 = st.columns(2)
-    with c1: nl(px.bar(df["Status"].value_counts().reset_index(name="C"), x="C", y="Status", orientation="h", color="Status", color_discrete_map=C_MAP, text="C", title="Status"), True)
-    with c2: pc(px.pie(df["Priority"].value_counts().reset_index(name="C"), names="Priority", values="C", hole=.45, color="Priority", color_discrete_map=PCOL, title="Priority").update_traces(textinfo="label+percent+value"))
+    with c1: nl(px.bar(df["Status"].value_counts().reset_index(name="C"), x="C", y="Status", orientation="h", color="Status", color_discrete_map=C_MAP, text="C", title="Tickets by Status"), True)
+    with c2: pc(px.pie(df["Priority"].value_counts().reset_index(name="C"), names="Priority", values="C", hole=.45, color="Priority", color_discrete_map=PCOL, title="Tickets by Priority").update_traces(textinfo="label+percent+value"))
 
     r1, r2 = st.columns(2)
     with r1: pc(px.pie(df["Resolution"].fillna("Unresolved").value_counts().reset_index(name="C"), names="Resolution", values="C", hole=.45, title="Resolution Breakdown").update_traces(textinfo="label+percent+value"))
@@ -146,19 +148,19 @@ with t1:
         m1, m2 = df.groupby("YearMonth").size().reset_index(name="C"), df[df["Resolved_dt"].notna()].copy()
         cb = m1.merge(m2.assign(RM=m2["Resolved_dt"].dt.to_period("M").astype(str)).groupby("RM").size().reset_index(name="R"), left_on="YearMonth", right_on="RM", how="left").fillna(0)
         f = go.Figure().add_trace(go.Scatter(x=cb["YearMonth"], y=cb["C"], name="Created", line=dict(color="#636EFA"))).add_trace(go.Scatter(x=cb["YearMonth"], y=cb["R"], name="Resolved", line=dict(color="#00CC96")))
-        pc(f.update_layout(title="Monthly Volume", xaxis_tickangle=-45, legend=dict(orientation="h",y=1.1)))
+        pc(f.update_layout(title="Monthly Ticket Volume", xaxis_tickangle=-45, legend=dict(orientation="h",y=1.1)))
 
 with t2:
     rt = df["Request Type"].value_counts().reset_index(name="C").sort_values("C")
-    nl(px.bar(rt.tail(20), x="C", y="Request Type", orientation="h", color="C", color_continuous_scale="Blues", text="C", title="Request Type Dist"), True)
+    nl(px.bar(rt.tail(20), x="C", y="Request Type", orientation="h", color="C", color_continuous_scale="Blues", text="C", title="Request Type Distribution"), True)
     c1, c2 = st.columns(2)
     p_ord = [x for x in ["Critical","High","Medium","Low"] if x in df["Priority"].unique()]
-    with c1: pc(px.imshow(df.groupby(["Priority","Status"]).size().unstack(fill_value=0).reindex(p_ord), text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Priority × Status"))
+    with c1: pc(px.imshow(df.groupby(["Priority","Status"]).size().unstack(fill_value=0).reindex(p_ord), text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Priority × Status Heatmap"))
     with c2: pc(px.imshow(df.groupby(["Issue Type","Priority"]).size().unstack(fill_value=0), text_auto=True, color_continuous_scale="Blues", aspect="auto", title="Issue Type × Priority"))
     c3, c4 = st.columns(2)
-    with c3: nl(px.bar(df["DayOfWeek"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]).fillna(0).reset_index(name="C"), x="DayOfWeek", y="C", color="C", color_continuous_scale="Purples", text="C", title="Day of Week").update_layout(coloraxis_showscale=False), True)
-    with c4: nl(px.bar(df["Hour"].value_counts().sort_index().reset_index(name="C"), x="Hour", y="C", color="C", color_continuous_scale="Teal", text="C", title="Hour of Day").update_layout(coloraxis_showscale=False))
-    if "Status Category" in df.columns: pc(px.area(df.groupby(["YearMonth","Status Category"]).size().reset_index(name="C"), x="YearMonth", y="C", color="Status Category", color_discrete_map={"Done":"#00CC96","In Progress":"#FFA15A","To Do":"#636EFA"}, title="Status Category Trend").update_layout(xaxis_tickangle=-45))
+    with c3: nl(px.bar(df["DayOfWeek"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]).fillna(0).reset_index(name="C"), x="DayOfWeek", y="C", color="C", color_continuous_scale="Purples", text="C", title="Tickets by Day of Week").update_layout(coloraxis_showscale=False), True)
+    with c4: nl(px.bar(df["Hour"].value_counts().sort_index().reset_index(name="C"), x="Hour", y="C", color="C", color_continuous_scale="Teal", text="C", title="Tickets by Hour of Day").update_layout(coloraxis_showscale=False))
+    if "Status Category" in df.columns: pc(px.area(df.groupby(["YearMonth","Status Category"]).size().reset_index(name="C"), x="YearMonth", y="C", color="Status Category", color_discrete_map={"Done":"#00CC96","In Progress":"#FFA15A","To Do":"#636EFA"}, title="Status Category Over Time").update_layout(xaxis_tickangle=-45))
 
 def s_bar(d, m, t):
     p = d.groupby(["Priority", m]).size().reset_index(name="C").pivot(index="Priority", columns=m, values="C").fillna(0).reset_index().set_index("Priority").reindex(p_ord).reset_index()
@@ -188,56 +190,71 @@ with t3:
     
     st.divider()
     c1, c2 = st.columns(2)
-    with c1: pc(px.pie(tfr["TFR_met"].value_counts().reset_index(name="C"), names="TFR_met", values="C", hole=.5, color="TFR_met", color_discrete_map={"Met":"#00CC96","Breached":"#EF553B"}, title="FR SLA Met vs Breached").update_traces(pull=[0.05,0]))
-    with c2: pc(px.pie(ttr["TTR_met"].value_counts().reset_index(name="C"), names="TTR_met", values="C", hole=.5, color="TTR_met", color_discrete_map={"Met":"#00CC96","Breached":"#EF553B"}, title="Res SLA Met vs Breached").update_traces(pull=[0.05,0]))
+    with c1: pc(px.pie(tfr["TFR_met"].value_counts().reset_index(name="C"), names="TFR_met", values="C", hole=.5, color="TFR_met", color_discrete_map={"Met":"#00CC96","Breached":"#EF553B"}, title="First Response SLA — Met vs Breached").update_traces(pull=[0.05,0]))
+    with c2: pc(px.pie(ttr["TTR_met"].value_counts().reset_index(name="C"), names="TTR_met", values="C", hole=.5, color="TTR_met", color_discrete_map={"Met":"#00CC96","Breached":"#EF553B"}, title="Resolution Time SLA — Met vs Breached").update_traces(pull=[0.05,0]))
     
     c3, c4 = st.columns(2)
-    with c3: s_bar(tfr, "TFR_met", "FR SLA by Priority")
-    with c4: s_bar(ttr, "TTR_met", "Res SLA by Priority")
+    with c3: s_bar(tfr, "TFR_met", "First Response SLA by Priority")
+    with c4: s_bar(ttr, "TTR_met", "Resolution Time SLA by Priority")
     
     c5, c6 = st.columns(2)
-    with c5: s_trnd(tfr, "TFR_met", "FR SLA % Met Trend", "#00CC96")
-    with c6: s_trnd(ttr, "TTR_met", "Res SLA % Met Trend", "#636EFA")
+    with c5: s_trnd(tfr, "TFR_met", "First Response SLA % Met — Monthly", "#00CC96")
+    with c6: s_trnd(ttr, "TTR_met", "Resolution Time SLA % Met — Monthly", "#636EFA")
     
     c7, c8 = st.columns(2)
-    with c7: s_brc(tfr, "TFR_met", "Assignee", "FR Breaches by Assignee", "Reds")
-    with c8: s_brc(ttr, "TTR_met", "Assignee", "Res Breaches by Assignee", "Oranges")
+    with c7: s_brc(tfr, "TFR_met", "Assignee", "First Response SLA Breaches (Assignee)", "Reds")
+    with c8: s_brc(ttr, "TTR_met", "Assignee", "Resolution SLA Breaches (Assignee)", "Oranges")
     
     c9, c10 = st.columns(2)
-    with c9: s_brc(tfr, "TFR_met", "Request Type", "FR Breaches by Req Type", "Reds")
-    with c10: s_brc(ttr, "TTR_met", "Request Type", "Res Breaches by Req Type", "Oranges")
+    with c9: s_brc(tfr, "TFR_met", "Request Type", "First Response Breaches by Request Type", "Reds")
+    with c10: s_brc(ttr, "TTR_met", "Request Type", "Resolution Breaches by Request Type", "Oranges")
 
     if "Act_Res" in df and len(df[df["Act_Res"]>0]):
         rc = df[df["Act_Res"]>0]
         rc = rc[rc["Act_Res"] <= rc["Act_Res"].quantile(0.95)]
         ca, cb = st.columns(2)
-        with ca: pc(px.histogram(rc, x="Act_Res", nbins=50, color_discrete_sequence=["#636EFA"], title="Act Res Time Dist (hrs)"))
-        with cb: nl(px.box(rc[rc["Priority"].notna()], x="Priority", y="Act_Res", color="Priority", color_discrete_map=PCOL, title="Res Time by Priority"))
+        with ca: pc(px.histogram(rc, x="Act_Res", nbins=50, color_discrete_sequence=["#636EFA"], title="Actual Resolution Time Distribution (hours, resolved tickets)"))
+        with cb: nl(px.box(rc[rc["Priority"].notna()], x="Priority", y="Act_Res", color="Priority", color_discrete_map=PCOL, title="Resolution Time by Priority"))
 
-    with st.expander("🔎 View Breached"):
-        b_d = tfr[tfr["TFR_met"]=="Breached"] if st.radio("Type", ["FR", "Res"], horizontal=True)=="FR" else ttr[ttr["TTR_met"]=="Breached"]
+    with st.expander("🔎 View Breached Tickets"):
+        b_d = tfr[tfr["TFR_met"]=="Breached"] if st.radio("Show breaches for", ["First Response SLA", "Resolution Time SLA"], horizontal=True)=="First Response SLA" else ttr[ttr["TTR_met"]=="Breached"]
         st.dataframe(b_d[["Issue key","Summary","Status","Priority","Assignee","Created"]].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
+    st.subheader("Customer Satisfaction")
     if len(sat):
         c1, c2, c3 = st.columns(3)
-        c1.metric("Avg Sat", f"{s_avg:.2f}/5"); c2.metric("Ratings", f"{len(sat):,}"); c3.metric("5-Star", f"{int((sat['Satisfaction']==5).sum())} ({100*(sat['Satisfaction']==5).mean():.1f}%)")
+        c1.metric("Avg Satisfaction", f"{s_avg:.2f} / 5"); c2.metric("Total Ratings", f"{len(sat):,}"); c3.metric("5-Star Ratings", f"{int((sat['Satisfaction']==5).sum())} ({100*(sat['Satisfaction']==5).mean():.1f}%)")
         ca, cb = st.columns(2)
-        with ca: nl(px.bar(sat["Satisfaction"].value_counts().sort_index().reset_index(name="C").assign(L=lambda x: x["Satisfaction"].astype(int).astype(str)+" ⭐"), x="L", y="C", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.25, "#FFA15A"], [0.5, "#FECB52"], [0.75, "#00CC96"], [1.0, "#19d3f3"]], text="C", title="Score Dist").update_layout(coloraxis_showscale=False), True)
+        with ca: nl(px.bar(sat["Satisfaction"].value_counts().sort_index().reset_index(name="C").assign(L=lambda x: x["Satisfaction"].astype(int).astype(str)+" ⭐"), x="L", y="C", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.25, "#FFA15A"], [0.5, "#FECB52"], [0.75, "#00CC96"], [1.0, "#19d3f3"]], text="C", title="Satisfaction Score Distribution").update_layout(coloraxis_showscale=False), True)
         with cb:
             sm = sat.groupby("YearMonth")["Satisfaction"].agg(["mean","count"]).reset_index()
             f = make_subplots(specs=[[{"secondary_y":True}]])
             f.add_trace(go.Bar(x=sm["YearMonth"], y=sm["count"], name="# Ratings", marker_color="#c7d7f5"), secondary_y=False)
-            f.add_trace(go.Scatter(x=sm["YearMonth"], y=sm["mean"], mode="lines+markers", name="Avg", line=dict(color="#636EFA")), secondary_y=True)
-            pc(f.update_layout(title="Sat Trend", xaxis_tickangle=-45))
+            f.add_trace(go.Scatter(x=sm["YearMonth"], y=sm["mean"], mode="lines+markers", name="Avg Score", line=dict(color="#636EFA")), secondary_y=True)
+            pc(f.update_layout(title="Satisfaction Over Time", xaxis_tickangle=-45))
         c3, c4 = st.columns(2)
-        with c3: nl(px.bar(sat.groupby("Priority")["Satisfaction"].mean().reset_index(name="A"), x="Priority", y="A", color="Priority", color_discrete_map=PCOL, text=np.round(sat.groupby("Priority")["Satisfaction"].mean().values,2), title="CSAT by Priority", range_y=[1,5]), True)
-        with c4: nl(px.bar(sat.groupby("Request Type")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(10), x="mean", y="Request Type", orientation="h", color="mean", color_continuous_scale="RdYlGn", text=np.round(sat.groupby("Request Type")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(10)["mean"].values,2), title="CSAT by Req Type (Top 10)", range_x=[1,5]).update_layout(coloraxis_showscale=False))
-        nl(px.bar(sat.groupby("Assignee")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(15), x="mean", y="Assignee", orientation="h", color="mean", color_continuous_scale="RdYlGn", text=np.round(sat.groupby("Assignee")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(15)["mean"].values,2), title="CSAT by Assignee (Min 3)", range_x=[1,5]).update_layout(coloraxis_showscale=False))
-    else: st.info("No sat data")
+        with c3: nl(px.bar(sat.groupby("Priority")["Satisfaction"].mean().reset_index(name="A"), x="Priority", y="A", color="Priority", color_discrete_map=PCOL, text=np.round(sat.groupby("Priority")["Satisfaction"].mean().values,2), title="Satisfaction by Priority", range_y=[1,5]), True)
+        with c4: nl(px.bar(sat.groupby("Request Type")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(10), x="mean", y="Request Type", orientation="h", color="mean", color_continuous_scale="RdYlGn", text=np.round(sat.groupby("Request Type")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(10)["mean"].values,2), title="Satisfaction by Request Type (top 10)", range_x=[1,5]).update_layout(coloraxis_showscale=False))
+        nl(px.bar(sat.groupby("Assignee")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(15), x="mean", y="Assignee", orientation="h", color="mean", color_continuous_scale="RdYlGn", text=np.round(sat.groupby("Assignee")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(15)["mean"].values,2), title="Avg Satisfaction by Assignee", range_x=[1,5]).update_layout(coloraxis_showscale=False))
+    else: st.info("No satisfaction ratings available.")
 
 with t5:
-    sr = st.text_input("Search Summary")
+    c1, c2 = st.columns(2)
+    with c1: pc(px.area(df.groupby("Week").size().reset_index(name="C"), x="Week", y="C", color_discrete_sequence=["#a6a6ff"], title="Weekly Ticket Volume").update_layout(xaxis_tickangle=-45))
+    with c2: nl(px.bar(df.groupby("Year").size().reset_index(name="C"), x="Year", y="C", color="Year", color_continuous_scale="Viridis", text="C", title="Tickets by Year").update_layout(coloraxis_showscale=False), True)
+
+    pc(px.line(df.groupby(["YearMonth", "Priority"]).size().reset_index(name="C"), x="YearMonth", y="C", color="Priority", color_discrete_map=PCOL, markers=True, title="Priority Trend Over Time").update_layout(xaxis_tickangle=-45, legend=dict(orientation="h", y=1.1)))
+    pc(px.imshow(df.groupby(["DayOfWeek", "Hour"]).size().unstack(fill_value=0).reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]), text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Day of Week × Hour Heatmap"))
+    
+    c_df = df.sort_values("Created_dt").dropna(subset=["Created_dt"]).copy()
+    c_df["Cum"] = range(1, len(c_df) + 1)
+    pc(px.area(c_df, x="Created_dt", y="Cum", color_discrete_sequence=["#82e0bc"], title="Cumulative Tickets Over Time"))
+
+    st.divider()
+    st.subheader("📋 Raw Data Explorer")
+    sr = st.text_input("Search in Summary")
     dp = df[df["Summary"].fillna("").str.contains(sr, case=False)] if sr else df
-    cs = st.multiselect("Cols", ["Issue key","Summary","Status","Priority","Assignee","Created","Resolution","TTR_met","TFR_met","Satisfaction","Request Type"], default=["Issue key","Summary","Status","Priority","Assignee","Created","Request Type"])
+    cs = st.multiselect("Select columns to display", ["Summary", "Issue key", "Status", "Priority", "Assignee", "Reporter", "Created", "Resolution", "Request Type"], default=["Summary", "Issue key", "Status", "Priority", "Assignee", "Reporter", "Created", "Resolution"])
     st.dataframe(dp[cs].sort_values("Created", ascending=False).head(1000), use_container_width=True, hide_index=True)
+    st.caption(f"Showing up to 1,000 of {len(dp):,} matching records")
