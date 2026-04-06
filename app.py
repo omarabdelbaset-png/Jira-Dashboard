@@ -25,10 +25,11 @@ except Exception:
 # ==========================================
 # --- 2. DATA FETCHER (LIVE OR CSV) ---
 # ==========================================
-@st.cache_data(ttl=600) # Refreshes every 10 minutes
+@st.cache_data(ttl=600) # Refreshes every 10 minutes automatically
 def load_data():
     df = pd.DataFrame()
     is_live = False
+    error_msg = None
 
     # 1. Try Live Jira Connection First
     if JIRA_EMAIL and JIRA_TOKEN:
@@ -41,7 +42,7 @@ def load_data():
             
             # Loop to fetch ALL historical tickets quickly
             while True:
-                # OPTIMIZATION: "fields" parameter ensures we ONLY download the tiny data we need, skipping giant comments/descriptions!
+                # OPTIMIZATION: We ONLY download the data we need, skipping giant comments/descriptions!
                 issues = jira.search_issues(
                     'project = SVF ORDER BY created DESC', 
                     startAt=start_at, 
@@ -75,30 +76,34 @@ def load_data():
             df = pd.DataFrame(data)
             is_live = True
         except Exception as e:
-            pass 
+            # Capture the exact reason why Jira rejected the connection
+            error_msg = str(e)
             
     # 2. Fallback to offline CSV 
     if not is_live and os.path.exists(CSV_FILE):
         df = pd.read_csv(CSV_FILE)
         
-    return df, is_live
+    return df, is_live, error_msg
 
 # Load the data
 with st.spinner("Connecting to Jira and downloading tickets (Optimized Mode)..."):
-    df, is_live = load_data()
+    df, is_live, error_msg = load_data()
 
 if df.empty:
     st.error("⚠️ No data found! Please ensure your Streamlit Secrets are set in the Advanced Settings.")
     st.stop()
 
 # ==========================================
-# --- 3. SIDEBAR FILTERS ---
+# --- 3. SIDEBAR FILTERS & ERRORS ---
 # ==========================================
 st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/8/82/Jira_%28Software%29_logo.svg", width=150)
+
 if is_live:
     st.sidebar.success(f"🟢 Live Connection Active\n\nLoaded {len(df)} tickets!")
 else:
     st.sidebar.warning("🟡 Using Offline CSV Data")
+    if error_msg:
+        st.sidebar.error(f"🚨 Jira Connection Failed:\n\n{error_msg}")
 
 st.sidebar.header("Filters")
 if 'Status' in df.columns:
