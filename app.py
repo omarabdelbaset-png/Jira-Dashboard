@@ -71,9 +71,17 @@ def parse_sat(sat_obj):
     except: return None
     
 def parse_req(req_obj):
-    if not req_obj: return "Unknown"
+    # Deep extraction for Jira's Customer Request Type formatting
+    if not req_obj: return ""
+    if isinstance(req_obj, str): return req_obj
     if isinstance(req_obj, dict):
-        return req_obj.get('requestType', {}).get('name', req_obj.get('name', 'Unknown'))
+        if 'requestType' in req_obj and isinstance(req_obj['requestType'], dict):
+            return req_obj['requestType'].get('name', "")
+        if 'currentValue' in req_obj:
+            return req_obj['currentValue']
+        return req_obj.get('name', req_obj.get('value', ""))
+    if isinstance(req_obj, list) and len(req_obj) > 0:
+        return parse_req(req_obj[0])
     return str(req_obj)
 
 # ==========================================
@@ -95,7 +103,8 @@ def load_data():
             tfr_id = get_id(['time to first response'])
             ttr_id = get_id(['time to resolution'])
             sat_id = get_id(['satisfaction', 'satisfaction rating'])
-            req_id = get_id(['request type'])
+            # Look for Customer Request Type first, then fallback to Request Type
+            req_id = get_id(['customer request type', 'request type'])
 
             fetch_fields = [
                 'status', 'priority', 'assignee', 'created', 
@@ -116,13 +125,17 @@ def load_data():
                 raw = issue.raw['fields']
                 status_str = str(issue.fields.status)
                 
-                # Status Category Logic
                 if 'Done' in status_str or 'Resolved' in status_str:
                     stat_cat = 'Done'
                 elif 'Progress' in status_str:
                     stat_cat = 'In Progress'
                 else:
                     stat_cat = 'To Do'
+                    
+                # Robust Request Type mapping
+                extracted_req = parse_req(raw.get(req_id)) if req_id else ""
+                if not extracted_req or extracted_req == "Unknown":
+                    extracted_req = issue.fields.issuetype.name if hasattr(issue.fields, 'issuetype') and issue.fields.issuetype else "Unknown"
 
                 data.append({
                     'Issue key': issue.key, 
@@ -140,7 +153,7 @@ def load_data():
                     'Custom field (Time to first response)': parse_sla_to_hhmm(raw.get(tfr_id)) if tfr_id else "", 
                     'Custom field (Time to resolution)': parse_sla_to_hhmm(raw.get(ttr_id)) if ttr_id else "",
                     'Satisfaction rating': parse_sat(raw.get(sat_id)) if sat_id else None,
-                    'Custom field (Request Type).1': parse_req(raw.get(req_id)) if req_id else str(issue.fields.issuetype),
+                    'Custom field (Request Type).1': extracted_req,
                     'Custom field ([CHART] Date of First Response)': pd.to_datetime(issue.fields.created).strftime("%d/%b/%y %I:%M %p") if issue.fields.created else None
                 })
             df_raw, is_live = pd.DataFrame(data), True
@@ -441,8 +454,12 @@ with tab2:
     st.subheader("Request Type Distribution")
     rt = df["Request Type"].value_counts().reset_index()
     rt.columns = ["Request Type", "Count"]
+    
+    # Sort so the largest bars are on top
+    rt = rt.sort_values(by="Count", ascending=True)
+    
     fig = px.bar(
-        rt.head(20), x="Count", y="Request Type", orientation="h",
+        rt.tail(20), x="Count", y="Request Type", orientation="h",
         color="Count", color_continuous_scale="Blues", text="Count"
     )
     fig.update_traces(textposition="outside")
