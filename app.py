@@ -5,10 +5,7 @@ from jira import JIRA
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Jira SVF Dashboard", layout="wide")
-
-# The auto-refresh is officially back to 1 MINUTE!
 st_autorefresh(interval=60000, key="j_ref")
-
 st.markdown('<style>.stMetric{background-color:#f8f9fa;border-radius:8px;padding:12px;} div[data-testid="metric-container"]{background-color:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:16px;}</style>', unsafe_allow_html=True)
 
 try: EM, TK = st.secrets["JIRA_EMAIL"], st.secrets["JIRA_API_TOKEN"]
@@ -39,7 +36,7 @@ def p_req(r):
     if type(r)==list and r: return p_req(r[0])
     return str(r)
 
-def fetch_data(jql_query):
+def fetch_data(jql):
     df, err = pd.DataFrame(), None
     if EM and TK:
         try:
@@ -49,7 +46,7 @@ def fetch_data(jql_query):
             f_tfr, f_ttr, f_sat, f_req = gid(['time to first response']), gid(['time to resolution']), gid(['satisfaction rating','satisfaction']), gid(['customer request type','portal request type','request type'])
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
-            for i in j.enhanced_search_issues(jql_query, maxResults=False, fields=','.join(flds)):
+            for i in j.enhanced_search_issues(jql, maxResults=False, fields=','.join(flds)):
                 r = i.raw['fields']
                 stt = str(i.fields.status)
                 rq = p_req(r.get(f_req) or r.get('customfield_10010'))
@@ -72,40 +69,23 @@ def fetch_data(jql_query):
         except Exception as e: err = str(e)
     return df, err
 
-# TIER 1 MEMORY: Locks all 5,500 tickets in memory for 24 Hours
-@st.cache_data(ttl=86400) 
+@st.cache_data(ttl=86400)
 def load_vault():
-    df, err = fetch_data('project=SVF ORDER BY created DESC')
-    if df.empty and os.path.exists("Jira Service Desk (8).csv"):
-        df = pd.read_csv("Jira Service Desk (8).csv", low_memory=False)
-        if "Custom field (Request Type).1" in df.columns: df["Request Type"] = df["Custom field (Request Type).1"].fillna("Unknown")
-        df["TFR_raw"] = df.get("Custom field (Time to first response)", "")
-        df["TTR_raw"] = df.get("Custom field (Time to resolution)", "")
-        if "Satisfaction rating" in df.columns: df["Satisfaction"] = pd.to_numeric(df["Satisfaction rating"], errors="coerce")
-    return df, err
+    if os.path.exists("jira_history.csv"): return pd.read_csv("jira_history.csv", low_memory=False), None
+    return fetch_data('project=SVF ORDER BY created DESC')
 
-# TIER 2 MEMORY: Empties every 55 seconds, downloads ONLY recent tickets instantly
-@st.cache_data(ttl=55) 
+@st.cache_data(ttl=55)
 def load_live():
-    return fetch_data('project=SVF AND updated >= -2d ORDER BY created DESC')
+    return fetch_data('project=SVF AND updated >= -30d ORDER BY created DESC')
 
-# --- THE DELTA MERGE ---
-with st.spinner("Accessing Vault (Takes 5 mins ONCE per day)..."): 
-    df_v, err_v = load_vault()
-    
-with st.spinner("Syncing Live Updates (3 seconds)..."): 
-    df_l, err_l = load_live()
+with st.spinner("Accessing History Data..."): df_v, err_v = load_vault()
+with st.spinner("Syncing recent updates..."): df_l, err_l = load_live()
 
-if df_v.empty and not df_l.empty: df_raw = df_l
-elif df_l.empty and not df_v.empty: df_raw = df_v
-elif not df_l.empty and not df_v.empty:
-    # Merges the fast updates into the massive Vault history automatically
-    df_raw = pd.concat([df_v, df_l], ignore_index=True).drop_duplicates(subset=['Issue key'], keep='last')
-else:
-    df_raw = pd.DataFrame()
-    st.error("Could not load Jira data.")
-    st.stop()
-    
+if df_v is not None and not df_v.empty and df_l is not None and not df_l.empty: df_raw = pd.concat([df_v, df_l]).drop_duplicates(subset=['Issue key'], keep='last')
+elif df_l is not None and not df_l.empty: df_raw = df_l
+elif df_v is not None and not df_v.empty: df_raw = df_v
+else: st.error("Could not load data."); st.stop()
+
 for c in ["Created", "Resolved"]: df_raw[f"{c}_dt"] = pd.to_datetime(df_raw[c], format="%d/%b/%y %I:%M %p", errors="coerce")
 df_raw["YearMonth"] = df_raw["Created_dt"].dt.to_period("M").astype(str)
 df_raw["Week"] = df_raw["Created_dt"].dt.to_period("W").astype(str)
@@ -117,11 +97,12 @@ df_raw["TFR_met"] = df_raw["TFR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=
 df_raw["TTR_met"] = df_raw["TTR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=0 else ("Breached" if pd.notna(x) else None))
 if df_raw["Resolved_dt"].notna().any() and df_raw["Created_dt"].notna().any(): df_raw["Act_Res"] = (df_raw["Resolved_dt"] - df_raw["Created_dt"]).dt.total_seconds()/3600
 
-st.sidebar.title("⚡ Data Controls")
-if st.sidebar.button("🔄 Force Deep Sync", help="Deletes the Vault and forces a full 5-minute download"):
-    load_vault.clear()
-    load_live.clear()
-    st.rerun()   
+st.sidebar.title("⚡ Admin Setup")
+if not os.path.exists("jira_history.csv"):
+    st.sidebar.warning("⚠️ No history file found! Slow Loading Active.")
+    st.sidebar.download_button("1. Download history file", df_raw.to_csv(index=False).encode('utf-8'), "jira_history.csv", "text/csv", help="Download this and upload it to GitHub for instant loading!")
+else:
+    st.sidebar.success("🚀 Fast Loading Active")
 
 m0 = dict(l=0, r=0, t=30, b=0)
 def pc(fig, out=False):
@@ -132,8 +113,6 @@ def nl(fig, out=False):
     st.plotly_chart(fig.update_layout(showlegend=False, margin=m0), use_container_width=True)
 
 st.sidebar.title("🔍 Filters")
-st.sidebar.success(f"🟢 Delta Sync Active\n{len(df_raw)} tickets perfectly synced.")
-
 def ms(col): return st.sidebar.multiselect(col, sorted(df_raw[col].dropna().unique()), default=sorted(df_raw[col].dropna().unique()))
 ss, sp, si, sa = ms("Status"), ms("Priority"), ms("Issue Type"), ms("Assignee")
 d_min, d_max = (df_raw["Created_dt"].min().date(), df_raw["Created_dt"].max().date()) if not df_raw["Created_dt"].isna().all() else (pd.Timestamp.now().date(), pd.Timestamp.now().date())
