@@ -52,8 +52,8 @@ def load():
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
             
-            # Change -180d to -90d or -365d depending on how much history you want to load
-            jql_query = 'project=SVF AND created >= -180d ORDER BY created DESC'
+            # Reverted to pull ALL historical tickets
+            jql_query = 'project=SVF ORDER BY created DESC'
             
             for i in j.enhanced_search_issues(jql_query, maxResults=False, fields=','.join(flds)):
                 r = i.raw['fields']
@@ -267,29 +267,17 @@ with t5:
     pc(px.area(c_df, x="Created_dt", y="Cum", color_discrete_sequence=["#82e0bc"], title="Cumulative Tickets Over Time"))
 
     st.divider()
-    
-    # --- NEW EXPORT BUTTON SECTION ---
     r_col1, r_col2 = st.columns([3, 1])
-    with r_col1:
-        st.subheader("📋 Raw Data Explorer")
+    with r_col1: st.subheader("📋 Raw Data Explorer")
     
     sr = st.text_input("Search in Summary")
     dp = df[df["Summary"].fillna("").str.contains(sr, case=False)] if sr else df
     cs = st.multiselect("Select columns to display", ["Summary", "Issue key", "Status", "Priority", "Assignee", "Reporter", "Created", "Resolution", "Request Type"], default=["Summary", "Issue key", "Status", "Priority", "Assignee", "Reporter", "Created", "Resolution"])
     
-    # Generate the CSV data for the download button
     csv_data = dp[cs].sort_values("Created", ascending=False).to_csv(index=False).encode('utf-8')
-    
     with r_col2:
-        # Added spacing to align perfectly with the subheader
         st.write("") 
-        st.download_button(
-            label="📥 Download to Excel/CSV",
-            data=csv_data,
-            file_name="jira_dashboard_export.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        st.download_button(label="📥 Download to Excel/CSV", data=csv_data, file_name="jira_dashboard_export.csv", mime="text/csv", use_container_width=True)
 
     st.dataframe(dp[cs].sort_values("Created", ascending=False).head(1000), use_container_width=True, hide_index=True)
     st.caption(f"Showing up to 1,000 of {len(dp):,} matching records")
