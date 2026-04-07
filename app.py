@@ -4,7 +4,7 @@ import os
 from jira import JIRA
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="Jira SVF Dashboard", layout="wide")
+st.set_page_config(page_title="Facilities Team Dashboard", layout="wide")
 st_autorefresh(interval=60000, key="j_ref")
 st.markdown('<style>.stMetric{background-color:#f8f9fa;border-radius:8px;padding:12px;} div[data-testid="metric-container"]{background-color:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:16px;}</style>', unsafe_allow_html=True)
 
@@ -97,12 +97,14 @@ df_raw["TFR_met"] = df_raw["TFR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=
 df_raw["TTR_met"] = df_raw["TTR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=0 else ("Breached" if pd.notna(x) else None))
 if df_raw["Resolved_dt"].notna().any() and df_raw["Created_dt"].notna().any(): df_raw["Act_Res"] = (df_raw["Resolved_dt"] - df_raw["Created_dt"]).dt.total_seconds()/3600
 
-st.sidebar.title("⚡ Admin Setup")
+# --- BRANDED SIDEBAR TITLE ---
+st.sidebar.title("🏢 Facilities Team")
+st.sidebar.markdown("---")
+
+# --- INVISIBLE ADMIN SECTION ---
 if not os.path.exists("jira_history.csv"):
-    st.sidebar.warning("⚠️ No history file found! Slow Loading Active.")
-    st.sidebar.download_button("1. Download history file", df_raw.to_csv(index=False).encode('utf-8'), "jira_history.csv", "text/csv", help="Download this and upload it to GitHub for instant loading!")
-else:
-    st.sidebar.success("🚀 Fast Loading Active")
+    st.sidebar.warning("⚠️ Recovery Mode: Missing history file.")
+    st.sidebar.download_button("Download Recovery File", df_raw.to_csv(index=False).encode('utf-8'), "jira_history.csv", "text/csv")
 
 m0 = dict(l=0, r=0, t=30, b=0)
 def pc(fig, out=False):
@@ -121,7 +123,7 @@ if len(dr)==1: dr=(dr[0],dr[0])
 
 df = df_raw[df_raw["Status"].isin(ss) & df_raw["Priority"].isin(sp) & df_raw["Issue Type"].isin(si) & df_raw["Assignee"].isin(sa) & (df_raw["Created_dt"].dt.date >= dr[0]) & (df_raw["Created_dt"].dt.date <= dr[1])]
 
-st.title("📊 Jira Service Desk Dashboard")
+st.title("📊 Facilities Team Dashboard")
 t1, t2, t3, t4, t5 = st.tabs(["📈 Overview", "🎫 Ticket Analysis", "🚦 SLA", "⭐ Satisfaction", "📅 Data & Export"])
 
 ttr, tfr, sat = df[df["TTR_met"].notna()], df[df["TFR_met"].notna()], df[df["Satisfaction"].notna()]
