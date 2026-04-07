@@ -5,7 +5,10 @@ from jira import JIRA
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Jira SVF Dashboard", layout="wide")
-st_autorefresh(interval=60000, key="j_ref")
+
+# Auto-refresh and memory set to 1 Hour (3,600,000 ms) so filters and buttons are instant
+st_autorefresh(interval=3600000, key="j_ref")
+
 st.markdown('<style>.stMetric{background-color:#f8f9fa;border-radius:8px;padding:12px;} div[data-testid="metric-container"]{background-color:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:16px;}</style>', unsafe_allow_html=True)
 
 try: EM, TK = st.secrets["JIRA_EMAIL"], st.secrets["JIRA_API_TOKEN"]
@@ -36,7 +39,8 @@ def p_req(r):
     if type(r)==list and r: return p_req(r[0])
     return str(r)
 
-@st.cache_data(ttl=55)
+# Memory set to 1 hour (3600 seconds) so clicks and exports are instant
+@st.cache_data(ttl=3600)
 def load():
     df, live, err = pd.DataFrame(), False, None
     if EM and TK:
@@ -87,11 +91,11 @@ def load():
         if df["Resolved_dt"].notna().any() and df["Created_dt"].notna().any(): df["Act_Res"] = (df["Resolved_dt"] - df["Created_dt"]).dt.total_seconds()/3600
     return df, live, err
 
-with st.spinner("Downloading updates..."): df_raw, live, err = load()
+with st.spinner("Downloading updates from Jira (This takes a few minutes)..."): df_raw, live, err = load()
 if df_raw.empty: st.error(f"Error: {err}"); st.stop()
 
 st.sidebar.title("⚡ Data Controls")
-if st.sidebar.button("🔄 Force Live Sync"):
+if st.sidebar.button("🔄 Force Live Sync", help="Click to pull the latest tickets instantly"):
     load.clear() 
     st.rerun()   
 
