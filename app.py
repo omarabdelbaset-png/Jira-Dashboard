@@ -2,8 +2,13 @@ import streamlit as st, pandas as pd, numpy as np, plotly.express as px, plotly.
 from plotly.subplots import make_subplots
 import os
 from jira import JIRA
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Jira SVF Dashboard", layout="wide")
+
+# Auto-refresh the dashboard every 5 minutes (300,000 milliseconds)
+st_autorefresh(interval=300000, key="jira_refresh")
+
 st.markdown('<style>.stMetric{background-color:#f8f9fa;border-radius:8px;padding:12px;} div[data-testid="metric-container"]{background-color:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:16px;}</style>', unsafe_allow_html=True)
 
 try: EM, TK = st.secrets["JIRA_EMAIL"], st.secrets["JIRA_API_TOKEN"]
@@ -34,7 +39,8 @@ def p_req(r):
     if type(r)==list and r: return p_req(r[0])
     return str(r)
 
-@st.cache_data(ttl=600)
+# Cache now lasts exactly 5 minutes, matching the auto-refresh timer perfectly
+@st.cache_data(ttl=300)
 def load():
     df, live, err = pd.DataFrame(), False, None
     if EM and TK:
@@ -85,7 +91,7 @@ def load():
         if df["Resolved_dt"].notna().any() and df["Created_dt"].notna().any(): df["Act_Res"] = (df["Resolved_dt"] - df["Created_dt"]).dt.total_seconds()/3600
     return df, live, err
 
-with st.spinner("Loading Dashboard..."): df_raw, live, err = load()
+with st.spinner("Downloading updates from Jira (Auto-Syncing)..."): df_raw, live, err = load()
 if df_raw.empty: st.error(f"Error: {err}"); st.stop()
 
 m0 = dict(l=0, r=0, t=30, b=0)
@@ -97,7 +103,7 @@ def nl(fig, out=False):
     st.plotly_chart(fig.update_layout(showlegend=False, margin=m0), use_container_width=True)
 
 st.sidebar.title("🔍 Filters")
-if live: st.sidebar.success(f"🟢 Live Data\n{len(df_raw)} tickets.")
+if live: st.sidebar.success(f"🟢 Live Data Active\n{len(df_raw)} tickets synced.")
 else: st.sidebar.warning(f"🟡 Offline CSV\n{err or ''}")
 
 def ms(col): return st.sidebar.multiselect(col, sorted(df_raw[col].dropna().unique()), default=sorted(df_raw[col].dropna().unique()))
@@ -217,7 +223,7 @@ with t3:
         with cb: nl(px.box(rc[rc["Priority"].notna()], x="Priority", y="Act_Res", color="Priority", color_discrete_map=PCOL, title="Resolution Time by Priority"))
 
     with st.expander("🔎 View Breached Tickets"):
-        b_d = tfr[tfr["TFR_met"]=="Breached"] if st.radio("Show breaches for", ["First Response SLA", "Resolution Time SLA"], horizontal=True)=="First Response SLA" else ttr[ttr["TTR_met"]=="Breached"]
+        b_d = tfr[tfr["TFR_met"]=="Breached"] if st.radio("Type", ["First Response", "Resolution"], horizontal=True)=="First Response" else ttr[ttr["TTR_met"]=="Breached"]
         st.dataframe(b_d[["Issue key","Summary","Status","Priority","Assignee","Created"]].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
 
 with t4:
