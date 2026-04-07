@@ -6,7 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Jira SVF Dashboard", layout="wide")
 
-# Auto-refresh the dashboard every 5 minutes (300,000 milliseconds)
+# Auto-refresh every 5 minutes (300,000 ms)
 st_autorefresh(interval=300000, key="jira_refresh")
 
 st.markdown('<style>.stMetric{background-color:#f8f9fa;border-radius:8px;padding:12px;} div[data-testid="metric-container"]{background-color:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:16px;}</style>', unsafe_allow_html=True)
@@ -39,8 +39,8 @@ def p_req(r):
     if type(r)==list and r: return p_req(r[0])
     return str(r)
 
-# Cache now lasts exactly 5 minutes, matching the auto-refresh timer perfectly
-@st.cache_data(ttl=300)
+# FIXED: Cache expires at 290 seconds, so the 300-second auto-refresh always gets fresh data!
+@st.cache_data(ttl=290)
 def load():
     df, live, err = pd.DataFrame(), False, None
     if EM and TK:
@@ -51,6 +51,10 @@ def load():
             f_tfr, f_ttr, f_sat, f_req = gid(['time to first response']), gid(['time to resolution']), gid(['satisfaction rating','satisfaction']), gid(['customer request type','portal request type','request type'])
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
+            
+            # --- SPEED HACK NOTE ---
+            # If you want it to load in 3 seconds instead of 30, change the line below to:
+            # j.enhanced_search_issues('project=SVF AND created >= -180d ORDER BY created DESC', maxResults=False, fields=','.join(flds))
             for i in j.enhanced_search_issues('project=SVF ORDER BY created DESC', maxResults=False, fields=','.join(flds)):
                 r = i.raw['fields']
                 stt = str(i.fields.status)
@@ -93,6 +97,12 @@ def load():
 
 with st.spinner("Downloading updates from Jira (Auto-Syncing)..."): df_raw, live, err = load()
 if df_raw.empty: st.error(f"Error: {err}"); st.stop()
+
+# --- THE NEW MANUAL REFRESH BUTTON ---
+st.sidebar.title("⚡ Data Controls")
+if st.sidebar.button("🔄 Force Live Sync", help="Click to pull the latest tickets instantly"):
+    load.clear() # Clears the memory
+    st.rerun()   # Forces the page to reload immediately
 
 m0 = dict(l=0, r=0, t=30, b=0)
 def pc(fig, out=False):
