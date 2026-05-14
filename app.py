@@ -46,7 +46,8 @@ def fetch_data(jql):
             f_tfr, f_ttr, f_sat, f_req = gid(['time to first response']), gid(['time to resolution']), gid(['satisfaction rating','satisfaction']), gid(['customer request type','portal request type','request type'])
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
-            for i in j.enhanced_search_issues(jql, maxResults=False, fields=','.join(flds)):
+            # FIX: Changed to search_issues to prevent silent cutoffs, maxResults=False gets everything
+            for i in j.search_issues(jql, maxResults=False, fields=','.join(flds)):
                 r = i.raw['fields']
                 stt = str(i.fields.status)
                 rq = p_req(r.get(f_req) or r.get('customfield_10010'))
@@ -76,7 +77,8 @@ def load_vault():
 
 @st.cache_data(ttl=55)
 def load_live():
-    return fetch_data('project=SVF AND updated >= -30d ORDER BY created DESC')
+    # FIX: Removed the "-30d" limit so it loads all tickets regardless of date
+    return fetch_data('project=SVF ORDER BY created DESC')
 
 with st.spinner("Accessing History Data..."): df_v, err_v = load_vault()
 with st.spinner("Syncing recent updates..."): df_l, err_l = load_live()
@@ -276,5 +278,6 @@ with t5:
         st.write("") 
         st.download_button("📥 Download Data", data=dp[cs].sort_values("Created", ascending=False).to_csv(index=False).encode('utf-8'), file_name="jira_export.csv", mime="text/csv", use_container_width=True)
 
-    st.dataframe(dp[cs].sort_values("Created", ascending=False).head(1000), use_container_width=True, hide_index=True)
-    st.caption(f"Showing up to 1,000 of {len(dp):,} matching records")
+    # FIX: Removed .head(1000) so all matching records are shown in the table
+    st.dataframe(dp[cs].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
+    st.caption(f"Showing all {len(dp):,} matching records")
