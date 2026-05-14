@@ -258,4 +258,27 @@ with t4:
 
 with t5:
     c1, c2 = st.columns(2)
-    with c1: pc(px.area(df.groupby("Week
+    with c1: pc(px.area(df.groupby("Week").size().reset_index(name="C"), x="Week", y="C", color_discrete_sequence=["#a6a6ff"], title="Weekly Volume").update_layout(xaxis_tickangle=-45))
+    with c2: nl(px.bar(df.groupby("Year").size().reset_index(name="C"), x="Year", y="C", color="Year", color_continuous_scale="Viridis", text="C", title="By Year").update_layout(coloraxis_showscale=False), True)
+
+    pc(px.line(df.groupby(["YearMonth", "Priority"]).size().reset_index(name="C"), x="YearMonth", y="C", color="Priority", color_discrete_map=PCOL, markers=True, title="Priority Trend").update_layout(xaxis_tickangle=-45, legend=dict(orientation="h", y=1.1)))
+    pc(px.imshow(df.groupby(["DayOfWeek", "Hour"]).size().unstack(fill_value=0).reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]), text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Day × Hour Heatmap"))
+    
+    c_df = df.sort_values("Created_dt").dropna(subset=["Created_dt"]).copy()
+    c_df["Cum"] = range(1, len(c_df) + 1)
+    pc(px.area(c_df, x="Created_dt", y="Cum", color_discrete_sequence=["#82e0bc"], title="Cumulative Tickets"))
+
+    st.divider()
+    r1, r2 = st.columns([3, 1])
+    with r1: st.subheader("📋 Raw Data")
+    
+    sr = st.text_input("Search Summary")
+    dp = df[df["Summary"].fillna("").str.contains(sr, case=False)] if sr else df
+    cs = st.multiselect("Cols", ["Summary", "Issue key", "Status", "Priority", "Assignee", "Reporter", "Created", "Resolution", "Request Type"], default=["Summary", "Issue key", "Status", "Priority", "Assignee", "Reporter", "Created", "Resolution"])
+    
+    with r2:
+        st.write("") 
+        st.download_button("📥 Download Data", data=dp[cs].sort_values("Created", ascending=False).to_csv(index=False).encode('utf-8'), file_name="jira_export.csv", mime="text/csv", use_container_width=True)
+
+    st.dataframe(dp[cs].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
+    st.caption(f"Showing all {len(dp):,} matching records")
