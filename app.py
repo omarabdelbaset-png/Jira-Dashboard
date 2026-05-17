@@ -46,8 +46,7 @@ def fetch_data(jql):
             f_tfr, f_ttr, f_sat, f_req = gid(['time to first response']), gid(['time to resolution']), gid(['satisfaction rating','satisfaction']), gid(['customer request type','portal request type','request type'])
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
-            
-            for i in j.search_issues(jql, maxResults=1000, fields=','.join(flds)):
+            for i in j.enhanced_search_issues(jql, maxResults=False, fields=','.join(flds)):
                 r = i.raw['fields']
                 stt = str(i.fields.status)
                 rq = p_req(r.get(f_req) or r.get('customfield_10010'))
@@ -68,8 +67,6 @@ def fetch_data(jql):
                 })
             df = pd.DataFrame(d)
         except Exception as e: err = str(e)
-    else:
-        err = "Missing API Credentials."
     return df, err
 
 @st.cache_data(ttl=86400)
@@ -79,13 +76,10 @@ def load_vault():
 
 @st.cache_data(ttl=55)
 def load_live():
-    return fetch_data('project=SVF AND updated >= -60d ORDER BY created DESC')
+    return fetch_data('project=SVF AND updated >= -30d ORDER BY created DESC')
 
 with st.spinner("Accessing History Data..."): df_v, err_v = load_vault()
 with st.spinner("Syncing recent updates..."): df_l, err_l = load_live()
-
-if err_l:
-    st.error(f"🚨 JIRA API ERROR: {err_l}")
 
 if df_v is not None and not df_v.empty and df_l is not None and not df_l.empty: df_raw = pd.concat([df_v, df_l]).drop_duplicates(subset=['Issue key'], keep='last')
 elif df_l is not None and not df_l.empty: df_raw = df_l
@@ -103,9 +97,11 @@ df_raw["TFR_met"] = df_raw["TFR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=
 df_raw["TTR_met"] = df_raw["TTR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=0 else ("Breached" if pd.notna(x) else None))
 if df_raw["Resolved_dt"].notna().any() and df_raw["Created_dt"].notna().any(): df_raw["Act_Res"] = (df_raw["Resolved_dt"] - df_raw["Created_dt"]).dt.total_seconds()/3600
 
+# --- BRANDED SIDEBAR TITLE ---
 st.sidebar.title("🏢 Facilities Team")
 st.sidebar.markdown("---")
 
+# --- INVISIBLE ADMIN SECTION ---
 if not os.path.exists("jira_history.csv"):
     st.sidebar.warning("⚠️ Recovery Mode: Missing history file.")
     st.sidebar.download_button("Download Recovery File", df_raw.to_csv(index=False).encode('utf-8'), "jira_history.csv", "text/csv")
@@ -280,5 +276,5 @@ with t5:
         st.write("") 
         st.download_button("📥 Download Data", data=dp[cs].sort_values("Created", ascending=False).to_csv(index=False).encode('utf-8'), file_name="jira_export.csv", mime="text/csv", use_container_width=True)
 
-    st.dataframe(dp[cs].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
-    st.caption(f"Showing all {len(dp):,} matching records")
+    st.dataframe(dp[cs].sort_values("Created", ascending=False).head(1000), use_container_width=True, hide_index=True)
+    st.caption(f"Showing up to 1,000 of {len(dp):,} matching records")
