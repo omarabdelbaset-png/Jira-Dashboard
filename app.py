@@ -6,7 +6,37 @@ from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Facilities Team Dashboard", layout="wide")
 st_autorefresh(interval=60000, key="j_ref")
-st.markdown('<style>.stMetric{background-color:#f8f9fa;border-radius:8px;padding:12px;} div[data-testid="metric-container"]{background-color:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:16px;}</style>', unsafe_allow_html=True)
+
+# --- CUSTOM BACKGROUND AND STYLING ---
+page_bg_img = '''
+<style>
+.stApp {
+    background-image: url("http://googleusercontent.com/image_generation_content/3");
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+}
+.block-container {
+    background-color: rgba(255, 255, 255, 0.95); 
+    border-radius: 10px;
+    padding: 2rem;
+    margin-top: 2rem;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+.stMetric {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 12px;
+} 
+div[data-testid="metric-container"] {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 16px;
+}
+</style>
+'''
+st.markdown(page_bg_img, unsafe_allow_html=True)
 
 try: EM, TK = st.secrets["JIRA_EMAIL"], st.secrets["JIRA_API_TOKEN"]
 except: EM, TK = None, None
@@ -47,7 +77,6 @@ def fetch_data(jql):
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
             
-            # STEP 5 CHANGE: The 1,000 ticket speed limit is restored
             for i in j.search_issues(jql, maxResults=1000, fields=','.join(flds)):
                 r = i.raw['fields']
                 stt = str(i.fields.status)
@@ -80,7 +109,6 @@ def load_vault():
 
 @st.cache_data(ttl=55)
 def load_live():
-    # STEP 5 CHANGE: The 60-day recent updates limit is restored for lightning-fast loading
     return fetch_data('project=SVF AND updated >= -60d ORDER BY created DESC')
 
 with st.spinner("Accessing History Data..."): df_v, err_v = load_vault()
@@ -115,10 +143,10 @@ if not os.path.exists("jira_history.csv"):
 m0 = dict(l=0, r=0, t=30, b=0)
 def pc(fig, out=False):
     if out: fig.update_traces(textposition="outside")
-    st.plotly_chart(fig.update_layout(margin=m0), use_container_width=True)
+    st.plotly_chart(fig.update_layout(margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
 def nl(fig, out=False):
     if out: fig.update_traces(textposition="outside")
-    st.plotly_chart(fig.update_layout(showlegend=False, margin=m0), use_container_width=True)
+    st.plotly_chart(fig.update_layout(showlegend=False, margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
 
 st.sidebar.title("🔍 Filters")
 def ms(col): return st.sidebar.multiselect(col, sorted(df_raw[col].dropna().unique()), default=sorted(df_raw[col].dropna().unique()))
