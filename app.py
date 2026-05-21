@@ -47,8 +47,8 @@ def fetch_data(jql):
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
             
-            # STEP 1 CHANGE: maxResults=False is enabled here to grab everything
-            for i in j.search_issues(jql, maxResults=False, fields=','.join(flds)):
+            # STEP 5 CHANGE: The 1,000 ticket speed limit is restored
+            for i in j.search_issues(jql, maxResults=1000, fields=','.join(flds)):
                 r = i.raw['fields']
                 stt = str(i.fields.status)
                 rq = p_req(r.get(f_req) or r.get('customfield_10010'))
@@ -80,8 +80,8 @@ def load_vault():
 
 @st.cache_data(ttl=55)
 def load_live():
-    # STEP 1 CHANGE: The 60 day limit has been completely removed to sync all tickets
-    return fetch_data('project=SVF ORDER BY created DESC')
+    # STEP 5 CHANGE: The 60-day recent updates limit is restored for lightning-fast loading
+    return fetch_data('project=SVF AND updated >= -60d ORDER BY created DESC')
 
 with st.spinner("Accessing History Data..."): df_v, err_v = load_vault()
 with st.spinner("Syncing recent updates..."): df_l, err_l = load_live()
