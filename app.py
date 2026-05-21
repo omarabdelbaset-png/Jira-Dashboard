@@ -11,7 +11,7 @@ st_autorefresh(interval=60000, key="j_ref")
 page_bg_img = '''
 <style>
 .stApp {
-    background-image: url("http://googleusercontent.com/image_generation_content/3");
+    background-image: url("https://googleusercontent.com/image_generation_content/3");
     background-size: cover;
     background-repeat: no-repeat;
     background-attachment: fixed;
