@@ -12,7 +12,7 @@ page_bg_img = '''
 <style>
 .stApp {
     /* Swapped to a permanent, public Unsplash image of a dark modern building */
-    background-image: url("https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=2069&auto=format&fit=crop");
+    background-image: url("https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=2070&auto=format&fit=crop");
     background-size: cover;
     background-repeat: no-repeat;
     background-attachment: fixed;
