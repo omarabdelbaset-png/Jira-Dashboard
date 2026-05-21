@@ -225,4 +225,62 @@ with t3:
     
     c9, c10 = st.columns(2)
     with c9: s_brc(tfr, "TFR_met", "Request Type", "FR Breaches by Req Type", "Reds")
-    with c10: s_brc(ttr, "TTR_met", "Request Type", "
+    with c10: s_brc(ttr, "TTR_met", "Request Type", "Res Breaches by Req Type", "Oranges")
+
+    if "Act_Res" in df and len(df[df["Act_Res"]>0]):
+        rc = df[df["Act_Res"]>0]
+        rc = rc[rc["Act_Res"] <= rc["Act_Res"].quantile(0.95)]
+        ca, cb = st.columns(2)
+        with ca: pc(px.histogram(rc, x="Act_Res", nbins=50, color_discrete_sequence=["#636EFA"], title="Act Res Time Dist (hrs)"))
+        with cb: nl(px.box(rc[rc["Priority"].notna()], x="Priority", y="Act_Res", color="Priority", color_discrete_map=PCOL, title="Res Time by Priority"))
+
+    with st.expander("🔎 View Breached Tickets"):
+        b_d = tfr[tfr["TFR_met"]=="Breached"] if st.radio("Type", ["FR", "Res"], horizontal=True)=="FR" else ttr[ttr["TTR_met"]=="Breached"]
+        st.dataframe(b_d[["Issue key","Summary","Status","Priority","Assignee","Created"]].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
+
+with t4:
+    if len(sat):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Avg Sat", f"{s_avg:.2f} / 5"); c2.metric("Ratings", f"{len(sat):,}"); c3.metric("5-Star", f"{int((sat['Satisfaction']==5).sum())} ({100*(sat['Satisfaction']==5).mean():.1f}%)")
+        ca, cb = st.columns(2)
+        with ca: nl(px.bar(sat["Satisfaction"].value_counts().sort_index().reset_index(name="C").assign(L=lambda x: x["Satisfaction"].astype(int).astype(str)+" ⭐"), x="L", y="C", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.25, "#FFA15A"], [0.5, "#FECB52"], [0.75, "#00CC96"], [1.0, "#19d3f3"]], text="C", title="Score Dist").update_layout(coloraxis_showscale=False), True)
+        with cb:
+            sm = sat.groupby("YearMonth")["Satisfaction"].agg(["mean","count"]).reset_index()
+            f = make_subplots(specs=[[{"secondary_y":True}]])
+            f.add_trace(go.Bar(x=sm["YearMonth"], y=sm["count"], name="# Ratings", marker_color="#c7d7f5"), secondary_y=False)
+            f.add_trace(go.Scatter(x=sm["YearMonth"], y=sm["mean"], mode="lines+markers", name="Avg Score", line=dict(color="#636EFA")), secondary_y=True)
+            pc(f.update_layout(title="Sat Over Time", xaxis_tickangle=-45))
+        c3, c4 = st.columns(2)
+        with c3: nl(px.bar(sat.groupby("Priority")["Satisfaction"].mean().reset_index(name="A"), x="Priority", y="A", color="Priority", color_discrete_map=PCOL, text=np.round(sat.groupby("Priority")["Satisfaction"].mean().values,2), title="CSAT by Priority", range_y=[1,5]), True)
+        with c4: nl(px.bar(sat.groupby("Request Type")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(10), x="mean", y="Request Type", orientation="h", color="mean", color_continuous_scale="RdYlGn", text=np.round(sat.groupby("Request Type")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(10)["mean"].values,2), title="CSAT by Req Type (top 10)", range_x=[1,5]).update_layout(coloraxis_showscale=False))
+        nl(px.bar(sat.groupby("Assignee")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(15), x="mean", y="Assignee", orientation="h", color="mean", color_continuous_scale="RdYlGn", text=np.round(sat.groupby("Assignee")["Satisfaction"].agg(["mean","count"]).reset_index().query("count>=3").sort_values("mean").tail(15)["mean"].values,2), title="Avg CSAT by Assignee", range_x=[1,5]).update_layout(coloraxis_showscale=False))
+    else: st.info("No sat data")
+
+with t5:
+    c1, c2 = st.columns(2)
+    with c1: pc(px.area(df.groupby("Week").size().reset_index(name="C"), x="Week", y="C", color_discrete_sequence=["#a6a6ff"], title="Weekly Volume").update_layout(xaxis_tickangle=-45))
+    with c2: nl(px.bar(df.groupby("Year").size().reset_index(name="C"), x="Year", y="C", color="Year", color_continuous_scale="Viridis", text="C", title="By Year").update_layout(coloraxis_showscale=False), True)
+
+    pc(px.line(df.groupby(["YearMonth", "Priority"]).size().reset_index(name="C"), x="YearMonth", y="C", color="Priority", color_discrete_map=PCOL, markers=True, title="Priority Trend").update_layout(xaxis_tickangle=-45, legend=dict(orientation="h", y=1.1)))
+    pc(px.imshow(df.groupby(["DayOfWeek", "Hour"]).size().unstack(fill_value=0).reindex(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]), text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Day × Hour Heatmap"))
+    
+    c_df = df.sort_values("Created_dt").dropna(subset=["Created_dt"]).copy()
+    c_df["Cum"] = range(1, len(c_df) + 1)
+    pc(px.area(c_df, x="Created_dt", y="Cum", color_discrete_sequence=["#82e0bc"], title="Cumulative Tickets"))
+
+    st.divider()
+    r1, r2 = st.columns([3, 1])
+    with r1: st.subheader("📋 Raw Data")
+    
+    sr = st.text_input("Search Summary")
+    dp = df[df["Summary"].fillna("").str.contains(sr, case=False)] if sr else df
+    
+    # MODIFIED: Completely removed Assignee and Reporter from the main options list and default list
+    cs = st.multiselect("Cols", ["Summary", "Issue key", "Status", "Priority", "Created", "Resolution", "Request Type"], default=["Summary", "Issue key", "Status", "Priority", "Created", "Resolution"])
+    
+    with r2:
+        st.write("") 
+        st.download_button("📥 Download Data", data=dp[cs].sort_values("Created", ascending=False).to_csv(index=False).encode('utf-8'), file_name="jira_export.csv", mime="text/csv", use_container_width=True)
+
+    st.dataframe(dp[cs].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
+    st.caption(f"Showing all {len(dp):,} matching records")
