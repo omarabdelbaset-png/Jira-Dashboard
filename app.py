@@ -47,7 +47,8 @@ def fetch_data(jql):
             flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
             d = []
             
-            for i in j.search_issues(jql, maxResults=1000, fields=','.join(flds)):
+            # STEP 1 CHANGE: maxResults=False is enabled here to grab everything
+            for i in j.search_issues(jql, maxResults=False, fields=','.join(flds)):
                 r = i.raw['fields']
                 stt = str(i.fields.status)
                 rq = p_req(r.get(f_req) or r.get('customfield_10010'))
@@ -79,7 +80,8 @@ def load_vault():
 
 @st.cache_data(ttl=55)
 def load_live():
-    return fetch_data('project=SVF AND updated >= -60d ORDER BY created DESC')
+    # STEP 1 CHANGE: The 60 day limit has been completely removed to sync all tickets
+    return fetch_data('project=SVF ORDER BY created DESC')
 
 with st.spinner("Accessing History Data..."): df_v, err_v = load_vault()
 with st.spinner("Syncing recent updates..."): df_l, err_l = load_live()
@@ -275,7 +277,6 @@ with t5:
     sr = st.text_input("Search Summary")
     dp = df[df["Summary"].fillna("").str.contains(sr, case=False)] if sr else df
     
-    # MODIFIED: Completely removed Assignee and Reporter from the main options list and default list
     cs = st.multiselect("Cols", ["Summary", "Issue key", "Status", "Priority", "Created", "Resolution", "Request Type"], default=["Summary", "Issue key", "Status", "Priority", "Created", "Resolution"])
     
     with r2:
