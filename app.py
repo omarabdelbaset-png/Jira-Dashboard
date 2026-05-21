@@ -11,10 +11,12 @@ st_autorefresh(interval=60000, key="j_ref")
 page_bg_img = '''
 <style>
 .stApp {
-    background-image: url("https://googleusercontent.com/image_generation_content/3");
+    /* Swapped to a permanent, public Unsplash image of a dark modern building */
+    background-image: url("https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=2070&auto=format&fit=crop");
     background-size: cover;
     background-repeat: no-repeat;
     background-attachment: fixed;
+    background-position: center;
 }
 .block-container {
     background-color: rgba(255, 255, 255, 0.95); 
