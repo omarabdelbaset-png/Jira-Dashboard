@@ -63,8 +63,8 @@ def sync_jira_data(local_data_path="jira_local_data.csv"):
             # to intercept status transformations on older tickets without a full database download.
             jql_query = 'project = "SVF" AND updated >= "-7d"'
             
-            # Fetch batch of altered issues (capped at 500 records per check to ensure rapid performance)
-            updated_issues = jira_client.search_issues(jql_query, max_results=500)
+            # FIXED ARGUMENT: Changed 'max_results' to 'maxResults' to match Jira API spec
+            updated_issues = jira_client.search_issues(jql_query, maxResults=500)
             
             if not updated_issues:
                 st.sidebar.success("⚡ Local sync database matches Jira Cloud live data.")
