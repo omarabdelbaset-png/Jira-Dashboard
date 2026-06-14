@@ -119,16 +119,19 @@ with st.spinner("Syncing recent updates..."): df_l, err_l = load_live()
 if err_l:
     st.error(f"🚨 JIRA API ERROR: {err_l}")
 
-# --- FIX 1: The Stuck Ticket & Data Preservation Merge ---
+# --- FIX 1: Safely merge new data and wipe out duplicates ---
 if df_v is not None and not df_v.empty and df_l is not None and not df_l.empty: 
-    df_raw = df_l.set_index('Issue key').combine_first(df_v.set_index('Issue key')).reset_index()
-    df_raw.to_csv("jira_history.csv", index=False) # Saves over the vault to unstick old tickets
+    df_raw = pd.concat([df_l, df_v]).drop_duplicates(subset=['Issue key'], keep='first')
+    df_raw.to_csv("jira_history.csv", index=False) 
 elif df_l is not None and not df_l.empty: 
     df_raw = df_l
     df_raw.to_csv("jira_history.csv", index=False)
 elif df_v is not None and not df_v.empty: 
     df_raw = df_v
-else: st.error("Could not load data."); st.stop()
+else: 
+    st.error("Could not load data.")
+    st.stop()
+# ------------------------------------------------------------
 
 for c in ["Created", "Resolved"]: df_raw[f"{c}_dt"] = pd.to_datetime(df_raw[c], format="%d/%b/%y %I:%M %p", errors="coerce")
 df_raw["YearMonth"] = df_raw["Created_dt"].dt.to_period("M").astype(str)
@@ -164,7 +167,6 @@ dr = st.sidebar.date_input("Date Range", [d_min, d_max], min_value=d_min, max_va
 if len(dr)==1: dr=(dr[0],dr[0])
 
 # --- FIX 2: All-Time Satisfaction Count ---
-# This safely grabs the total count of ratings BEFORE you apply the date filter (dr)
 all_time_sat_count = df_raw["Satisfaction"].notna().sum() if "Satisfaction" in df_raw.columns else 0
 
 df = df_raw[df_raw["Status"].isin(ss) & df_raw["Priority"].isin(sp) & df_raw["Issue Type"].isin(si) & df_raw["Assignee"].isin(sa) & (df_raw["Created_dt"].dt.date >= dr[0]) & (df_raw["Created_dt"].dt.date <= dr[1])]
@@ -184,8 +186,6 @@ with t1:
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("Res SLA Met", f"{ttr_p:.1f}%", f"-{int((ttr['TTR_met']=='Breached').sum())} breached", "inverse")
     s2.metric("FR SLA Met", f"{tfr_p:.1f}%", f"-{int((tfr['TFR_met']=='Breached').sum())} breached", "inverse")
-    
-    # Applied All-Time Count to this metric:
     s3.metric("Avg Sat", f"{s_avg:.2f}/5", f"{int(all_time_sat_count)} all-time ratings")
     s4.metric("5-Star", f"{int((sat['Satisfaction']==5).sum())}", f"{100*int((sat['Satisfaction']==5).sum())/len(sat):.1f}%" if len(sat) else "0%")
 
@@ -285,7 +285,6 @@ with t3:
 with t4:
     if len(sat):
         c1, c2, c3 = st.columns(3)
-        # Applied All-Time Count to Tab 4 ratings metric:
         c1.metric("Avg Sat", f"{s_avg:.2f} / 5"); c2.metric("Total Ratings", f"{int(all_time_sat_count):,}"); c3.metric("5-Star", f"{int((sat['Satisfaction']==5).sum())} ({100*(sat['Satisfaction']==5).mean():.1f}%)")
         ca, cb = st.columns(2)
         with ca: nl(px.bar(sat["Satisfaction"].value_counts().sort_index().reset_index(name="C").assign(L=lambda x: x["Satisfaction"].astype(int).astype(str)+" ⭐"), x="L", y="C", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.25, "#FFA15A"], [0.5, "#FECB52"], [0.75, "#00CC96"], [1.0, "#19d3f3"]], text="C", title="Score Dist").update_layout(coloraxis_showscale=False), True)
