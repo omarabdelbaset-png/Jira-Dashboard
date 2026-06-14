@@ -1,188 +1,286 @@
-import pandas as pd
-import streamlit as st
-from jira import JIRA
+import streamlit as st, pandas as pd, numpy as np, plotly.express as px, plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import os
+from jira import JIRA
+from streamlit_autorefresh import st_autorefresh
 
-# =====================================================================
-# 1. PAGE CONFIGURATION
-# =====================================================================
-st.set_page_config(
-    page_title="Facilities Jira Live Dashboard",
-    page_icon="📊",
-    layout="wide"
-)
+st.set_page_config(page_title="Facilities Team Dashboard", layout="wide")
+st_autorefresh(interval=60000, key="j_ref")
 
-# =====================================================================
-# 2. JIRA CREDENTIALS & CONNECTION SETUP
-# =====================================================================
-JIRA_SERVER = "https://your-domain.atlassian.net"
-JIRA_EMAIL = "your-email@domain.com"
-JIRA_API_TOKEN = "YOUR_API_TOKEN"
+# --- CUSTOM BACKGROUND AND STYLING ---
+page_bg_img = '''
+<style>
+.stApp {
+    /* Swapped to a permanent, public Unsplash image of a dark modern building */
+    background-image: url("https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=2070&auto=format&fit=crop");
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    background-position: center;
+}
+.block-container {
+    background-color: rgba(255, 255, 255, 0.95); 
+    border-radius: 10px;
+    padding: 2rem;
+    margin-top: 2rem;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+.stMetric {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 12px;
+} 
+div[data-testid="metric-container"] {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 16px;
+}
+</style>
+'''
+st.markdown(page_bg_img, unsafe_allow_html=True)
 
-@st.cache_resource
-def get_jira_client():
-    options = {'server': JIRA_SERVER}
+try: EM, TK = st.secrets["JIRA_EMAIL"], st.secrets["JIRA_API_TOKEN"]
+except: EM, TK = None, None
+PCOL = {"Critical":"#EF553B", "High":"#FFA15A", "Medium":"#636EFA", "Low":"#00CC96"}
+C_MAP = {"Open":"#EF553B", "In Progress":"#FFA15A", "Resolved":"#00CC96", "Closed":"#636EFA", "Canceled":"#AB63FA"}
+
+def p_hm(v):
+    try: return int(v.split(":")[0])*60 + int(v.split(":")[1])
+    except: return np.nan
+
+def p_sla(s):
+    if not s: return ""
+    if type(s)==str and ":" in s: return s
     try:
-        return JIRA(options, basic_auth=(JIRA_EMAIL, JIRA_API_TOKEN))
-    except Exception as e:
-        st.error(f"Failed to connect to Jira: {e}")
-        return None
+        c = s.get('completedCycles',[{}])[-1] if type(s)==dict and s.get('completedCycles') else s.get('ongoingCycle',{})
+        if c:
+            m = c.get('remainingTime',{}).get('millis',0)/60000.0
+            if c.get('breached') and m>0: m = -m
+            return f"-{abs(int(m))//60:02d}:{abs(int(m))%60:02d}" if m<0 else f"{abs(int(m))//60:02d}:{abs(int(m))%60:02d}"
+    except: pass
+    return ""
 
-jira_client = get_jira_client()
+def p_req(r):
+    if not r: return "Unknown"
+    if type(r)==str: return r.split('/')[-1].replace('-',' ').title() if '/' in r else r
+    if type(r)==dict: return r.get('requestType',{}).get('name', r.get('name', r.get('value', r.get('currentValue', "Unknown"))))
+    if type(r)==list and r: return p_req(r[0])
+    return str(r)
 
-# =====================================================================
-# 3. DATA FETCHING & SYNC ENGINE
-# =====================================================================
-@st.cache_data(ttl=300) # Caches data for 5 minutes so it stays fast
-def sync_jira_data(local_data_path="jira_export (9).csv"):
-    # Load your historical CSV data
-    if os.path.exists(local_data_path):
+def fetch_data(jql):
+    df, err = pd.DataFrame(), None
+    if EM and TK:
         try:
-            local_df = pd.read_csv(local_data_path)
-        except Exception:
-            local_df = pd.DataFrame(columns=['Issue key', 'Summary', 'Status', 'Priority', 'Created', 'Resolution'])
-    else:
-        local_df = pd.DataFrame(columns=['Issue key', 'Summary', 'Status', 'Priority', 'Created', 'Resolution'])
-
-    # Ensure 'Created' is a proper datetime format for the date filter to work
-    if 'Created' in local_df.columns:
-        local_df['Created'] = pd.to_datetime(local_df['Created'], errors='coerce')
-
-    if jira_client is None:
-        return local_df
-
-    with st.spinner("Fetching the latest fast updates..."):
-        try:
-            # Fetch recent updates (Last 7 days)
-            jql_query = 'project = "SVF" AND updated >= "-7d"'
-            updated_issues = jira_client.search_issues(jql_query, maxResults=500)
+            j = JIRA("https://itsupportsivision.atlassian.net", basic_auth=(EM, TK))
+            afs = j.fields()
+            def gid(ns): return next((f['id'] for f in afs if any(n in f['name'].lower() for n in ns)), None)
+            f_tfr, f_ttr, f_sat, f_req = gid(['time to first response']), gid(['time to resolution']), gid(['satisfaction rating','satisfaction']), gid(['customer request type','portal request type','request type'])
+            flds = ['status','priority','assignee','created','resolutiondate','updated','issuetype','resolution','reporter','summary','customfield_10010'] + [x for x in [f_tfr,f_ttr,f_sat,f_req] if x]
+            d = []
             
-            if not updated_issues:
-                return local_df
-
-            # Parse new incoming tickets
-            new_records = []
-            for issue in updated_issues:
-                new_records.append({
-                    'Issue key': issue.key,
-                    'Summary': issue.fields.summary,
-                    'Status': issue.fields.status.name,
-                    'Priority': issue.fields.priority.name,
-                    'Created': issue.fields.created,
-                    'Resolution': issue.fields.resolution.name if issue.fields.resolution else 'Unresolved'
+            for i in j.search_issues(jql, maxResults=1000, fields=','.join(flds)):
+                r = i.raw['fields']
+                stt = str(i.fields.status)
+                rq = p_req(r.get(f_req) or r.get('customfield_10010'))
+                d.append({
+                    'Issue key': i.key, 'Summary': i.fields.summary, 'Status': stt,
+                    'Status Category': 'Done' if 'Done' in stt or 'Resolved' in stt else ('In Progress' if 'Progress' in stt else 'To Do'),
+                    'Priority': str(i.fields.priority) if getattr(i.fields,'priority',None) else 'None',
+                    'Assignee': str(i.fields.assignee) if getattr(i.fields,'assignee',None) else 'Unassigned',
+                    'Reporter': str(i.fields.reporter) if getattr(i.fields,'reporter',None) else 'Unknown',
+                    'Issue Type': str(i.fields.issuetype) if getattr(i.fields,'issuetype',None) else 'Unknown',
+                    'Resolution': str(i.fields.resolution) if getattr(i.fields,'resolution',None) else 'Unresolved',
+                    'Created': pd.to_datetime(i.fields.created).strftime("%d/%b/%y %I:%M %p") if i.fields.created else None,
+                    'Resolved': pd.to_datetime(i.fields.resolutiondate).strftime("%d/%b/%y %I:%M %p") if getattr(i.fields,'resolutiondate',None) else None,
+                    'TFR_raw': p_sla(r.get(f_tfr)) if f_tfr else "",
+                    'TTR_raw': p_sla(r.get(f_ttr)) if f_ttr else "",
+                    'Satisfaction': float(r.get(f_sat).get('rating') if type(r.get(f_sat))==dict else r.get(f_sat)) if f_sat and r.get(f_sat) else np.nan,
+                    'Request Type': rq if rq!="Unknown" else (str(i.fields.issuetype) if getattr(i.fields,'issuetype',None) else "Unknown")
                 })
-            new_df = pd.DataFrame(new_records)
-            new_df['Created'] = pd.to_datetime(new_df['Created'], errors='coerce')
-
-            # Safely overwrite your CSV with any brand new updates
-            local_df.set_index('Issue key', inplace=True)
-            new_df.set_index('Issue key', inplace=True)
-
-            synchronized_master = new_df.combine_first(local_df).reset_index()
-
-            # Save the new master data back to your CSV
-            synchronized_master.to_csv(local_data_path, index=False)
-            
-            return synchronized_master
-
-        except Exception as api_error:
-            st.error(f"Sync error: {api_error}. Displaying local data instead.")
-            if 'Issue key' in local_df.index.names:
-                local_df = local_df.reset_index()
-            return local_df
-
-# =====================================================================
-# 4. MAIN DASHBOARD UI
-# =====================================================================
-def main():
-    st.title("🏢 Facilities Operational Jira Analytics")
-    st.markdown("---")
-
-    # 1. Fetch the RAW, unfiltered data
-    raw_df = sync_jira_data()
-
-    # 2. CALCULATE ALL-TIME SATISFACTION FIRST (Before any filters are applied!)
-    satisfaction_col_name = None
-    for col in raw_df.columns:
-        if 'satisfaction' in col.lower() or 'csat' in col.lower() or 'rating' in col.lower():
-            satisfaction_col_name = col
-            break
-
-    if satisfaction_col_name:
-        all_time_satisfaction = raw_df[satisfaction_col_name].notna().sum()
+            df = pd.DataFrame(d)
+        except Exception as e: err = str(e)
     else:
-        all_time_satisfaction = 0
+        err = "Missing API Credentials."
+    return df, err
 
-    # 3. Setup Sidebar & Date Filter
-    st.sidebar.header("Filters")
+@st.cache_data(ttl=86400)
+def load_vault():
+    if os.path.exists("jira_history.csv"): return pd.read_csv("jira_history.csv", low_memory=False), None
+    return fetch_data('project=SVF ORDER BY created DESC')
+
+@st.cache_data(ttl=55)
+def load_live():
+    return fetch_data('project=SVF AND updated >= -60d ORDER BY created DESC')
+
+with st.spinner("Accessing History Data..."): df_v, err_v = load_vault()
+with st.spinner("Syncing recent updates..."): df_l, err_l = load_live()
+
+if err_l:
+    st.error(f"🚨 JIRA API ERROR: {err_l}")
+
+# --- FIX 1: The Stuck Ticket & Data Preservation Merge ---
+if df_v is not None and not df_v.empty and df_l is not None and not df_l.empty: 
+    df_raw = df_l.set_index('Issue key').combine_first(df_v.set_index('Issue key')).reset_index()
+    df_raw.to_csv("jira_history.csv", index=False) # Saves over the vault to unstick old tickets
+elif df_l is not None and not df_l.empty: 
+    df_raw = df_l
+    df_raw.to_csv("jira_history.csv", index=False)
+elif df_v is not None and not df_v.empty: 
+    df_raw = df_v
+else: st.error("Could not load data."); st.stop()
+
+for c in ["Created", "Resolved"]: df_raw[f"{c}_dt"] = pd.to_datetime(df_raw[c], format="%d/%b/%y %I:%M %p", errors="coerce")
+df_raw["YearMonth"] = df_raw["Created_dt"].dt.to_period("M").astype(str)
+df_raw["Week"] = df_raw["Created_dt"].dt.to_period("W").astype(str)
+df_raw["DayOfWeek"] = df_raw["Created_dt"].dt.day_name()
+df_raw["Hour"] = df_raw["Created_dt"].dt.hour
+df_raw["Year"] = df_raw["Created_dt"].dt.year
+df_raw["TFR_m"], df_raw["TTR_m"] = df_raw["TFR_raw"].apply(p_hm), df_raw["TTR_raw"].apply(p_hm)
+df_raw["TFR_met"] = df_raw["TFR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=0 else ("Breached" if pd.notna(x) else None))
+df_raw["TTR_met"] = df_raw["TTR_m"].apply(lambda x: "Met" if pd.notna(x) and x>=0 else ("Breached" if pd.notna(x) else None))
+if df_raw["Resolved_dt"].notna().any() and df_raw["Created_dt"].notna().any(): df_raw["Act_Res"] = (df_raw["Resolved_dt"] - df_raw["Created_dt"]).dt.total_seconds()/3600
+
+st.sidebar.title("🏢 Facilities Team")
+st.sidebar.markdown("---")
+
+if not os.path.exists("jira_history.csv"):
+    st.sidebar.warning("⚠️ Recovery Mode: Missing history file.")
+    st.sidebar.download_button("Download Recovery File", df_raw.to_csv(index=False).encode('utf-8'), "jira_history.csv", "text/csv")
+
+m0 = dict(l=0, r=0, t=30, b=0)
+def pc(fig, out=False):
+    if out: fig.update_traces(textposition="outside")
+    st.plotly_chart(fig.update_layout(margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
+def nl(fig, out=False):
+    if out: fig.update_traces(textposition="outside")
+    st.plotly_chart(fig.update_layout(showlegend=False, margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
+
+st.sidebar.title("🔍 Filters")
+def ms(col): return st.sidebar.multiselect(col, sorted(df_raw[col].dropna().unique()), default=sorted(df_raw[col].dropna().unique()))
+ss, sp, si, sa = ms("Status"), ms("Priority"), ms("Issue Type"), ms("Assignee")
+d_min, d_max = (df_raw["Created_dt"].min().date(), df_raw["Created_dt"].max().date()) if not df_raw["Created_dt"].isna().all() else (pd.Timestamp.now().date(), pd.Timestamp.now().date())
+dr = st.sidebar.date_input("Date Range", [d_min, d_max], min_value=d_min, max_value=d_max)
+if len(dr)==1: dr=(dr[0],dr[0])
+
+# --- FIX 2: All-Time Satisfaction Count ---
+# This safely grabs the total count of ratings BEFORE you apply the date filter (dr)
+all_time_sat_count = df_raw["Satisfaction"].notna().sum() if "Satisfaction" in df_raw.columns else 0
+
+df = df_raw[df_raw["Status"].isin(ss) & df_raw["Priority"].isin(sp) & df_raw["Issue Type"].isin(si) & df_raw["Assignee"].isin(sa) & (df_raw["Created_dt"].dt.date >= dr[0]) & (df_raw["Created_dt"].dt.date <= dr[1])]
+
+st.title("📊 Facilities Team Dashboard")
+t1, t2, t3, t4, t5 = st.tabs(["📈 Overview", "🎫 Ticket Analysis", "🚦 SLA", "⭐ Satisfaction", "📅 Data & Export"])
+
+ttr, tfr, sat = df[df["TTR_met"].notna()], df[df["TFR_met"].notna()], df[df["Satisfaction"].notna()]
+ttr_p = 100*(ttr["TTR_met"]=="Met").mean() if len(ttr) else 0
+tfr_p = 100*(tfr["TFR_met"]=="Met").mean() if len(tfr) else 0
+s_avg = sat["Satisfaction"].mean() if len(sat) else 0
+
+with t1:
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Total Tickets", f"{len(df):,}"); c2.metric("Open", int((df["Status"]=="Open").sum())); c3.metric("In Progress", int((df["Status"].str.contains("Progress", na=False)).sum()))
+    c4.metric("Resolved", int((df["Status"]=="Resolved").sum())); c5.metric("Closed", int((df["Status"]=="Closed").sum())); c6.metric("Canceled", int((df["Status"]=="Canceled").sum()))
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Res SLA Met", f"{ttr_p:.1f}%", f"-{int((ttr['TTR_met']=='Breached').sum())} breached", "inverse")
+    s2.metric("FR SLA Met", f"{tfr_p:.1f}%", f"-{int((tfr['TFR_met']=='Breached').sum())} breached", "inverse")
     
-    # Get min and max dates for the calendar default
-    min_date = raw_df['Created'].min()
-    max_date = raw_df['Created'].max()
+    # Applied All-Time Count to this metric:
+    s3.metric("Avg Sat", f"{s_avg:.2f}/5", f"{int(all_time_sat_count)} all-time ratings")
+    s4.metric("5-Star", f"{int((sat['Satisfaction']==5).sum())}", f"{100*int((sat['Satisfaction']==5).sum())/len(sat):.1f}%" if len(sat) else "0%")
+
+    def gauge(v, t, mx=100, c="#00CC96"): return go.Figure(go.Indicator(mode="gauge+number+delta" if mx==100 else "gauge+number", value=v, title={"text":t}, number={"suffix":"/5" if mx==5 else "%"}, delta={"reference":80} if mx==100 else None, gauge={"axis":{"range":[0 if mx==100 else 1, mx]},"bar":{"color":c},"threshold":{"line":{"color":"orange","width":3},"value":80 if mx==100 else 4}}))
     
-    # Make sure we have valid dates
-    if pd.isna(min_date) or pd.isna(max_date):
-        date_range = st.sidebar.date_input("Select Date Range", [])
-    else:
-        date_range = st.sidebar.date_input("Select Date Range", [min_date.date(), max_date.date()])
+    o1, o2, o3, o4 = st.columns(4)
+    with o1: pc(gauge(ttr_p, "Res SLA %", 100, "#00CC96" if ttr_p>=80 else "#EF553B"))
+    with o2: pc(gauge(tfr_p, "FR SLA %", 100, "#00CC96" if tfr_p>=80 else "#EF553B"))
+    with o3: pc(gauge(s_avg, "Avg Score", 5, "#636EFA"))
+    with o4:
+        st.subheader("Satisfaction")
+        if len(sat): nl(px.bar(sat["Satisfaction"].value_counts().reset_index(name="C").assign(L=lambda x: x["Satisfaction"].astype(int).astype(str)+" ⭐"), x="L", y="C", color="Satisfaction", color_continuous_scale=[[0, "#EF553B"], [0.5, "#FECB52"], [1.0, "#00CC96"]]).update_layout(coloraxis_showscale=False, xaxis_title="", yaxis_title=""))
 
-    # Apply Date Filter to make our active dataframe (df)
-    df = raw_df.copy() 
-    if len(date_range) == 2:
-        start_date = pd.to_datetime(date_range[0])
-        # Add 1 day to end_date to include the full end day up to midnight
-        end_date = pd.to_datetime(date_range[1]) + pd.Timedelta(days=1) 
-        df = df[(df['Created'] >= start_date) & (df['Created'] < end_date)]
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1: nl(px.bar(df["Status"].value_counts().reset_index(name="C"), x="C", y="Status", orientation="h", color="Status", color_discrete_map=C_MAP, text="C", title="By Status"), True)
+    with c2: pc(px.pie(df["Priority"].value_counts().reset_index(name="C"), names="Priority", values="C", hole=.45, color="Priority", color_discrete_map=PCOL, title="By Priority").update_traces(textinfo="label+percent+value"))
 
-    # 4. Calculate metrics using the FILTERED data (df)
-    total_tickets = len(df)
-    open_tickets = len(df[df['Status'].isin(['Open', 'In Progress', 'Reopened', 'Waiting for customer'])])
-    resolved_tickets = len(df[df['Status'].isin(['Resolved', 'Closed', 'Canceled', 'Done'])])
+    r1, r2 = st.columns(2)
+    with r1: pc(px.pie(df["Resolution"].fillna("Unresolved").value_counts().reset_index(name="C"), names="Resolution", values="C", hole=.45, title="Resolutions").update_traces(textinfo="label+percent+value"))
+    with r2:
+        m1, m2 = df.groupby("YearMonth").size().reset_index(name="C"), df[df["Resolved_dt"].notna()].copy()
+        cb = m1.merge(m2.assign(RM=m2["Resolved_dt"].dt.to_period("M").astype(str)).groupby("RM").size().reset_index(name="R"), left_on="YearMonth", right_on="RM", how="left").fillna(0)
+        f = go.Figure().add_trace(go.Scatter(x=cb["YearMonth"], y=cb["C"], name="Created", line=dict(color="#636EFA"))).add_trace(go.Scatter(x=cb["YearMonth"], y=cb["R"], name="Resolved", line=dict(color="#00CC96")))
+        pc(f.update_layout(title="Monthly Volume", xaxis_tickangle=-45, legend=dict(orientation="h",y=1.1)))
 
-    # 5. Display the Metrics
-    col1, col2, col3, col4 = st.columns(4)
+with t2:
+    rt = df["Request Type"].value_counts().reset_index(name="C").sort_values("C")
+    nl(px.bar(rt.tail(20), x="C", y="Request Type", orientation="h", color="C", color_continuous_scale="Blues", text="C", title="Request Types"), True)
+    c1, c2 = st.columns(2)
+    p_ord = [x for x in ["Critical","High","Medium","Low"] if x in df["Priority"].unique()]
+    with c1: pc(px.imshow(df.groupby(["Priority","Status"]).size().unstack(fill_value=0).reindex(p_ord), text_auto=True, color_continuous_scale="YlOrRd", aspect="auto", title="Priority × Status"))
+    with c2: pc(px.imshow(df.groupby(["Issue Type","Priority"]).size().unstack(fill_value=0), text_auto=True, color_continuous_scale="Blues", aspect="auto", title="Issue Type × Priority"))
+    c3, c4 = st.columns(2)
+    with c3: nl(px.bar(df["DayOfWeek"].value_counts().reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]).fillna(0).reset_index(name="C"), x="DayOfWeek", y="C", color="C", color_continuous_scale="Purples", text="C", title="By Day").update_layout(coloraxis_showscale=False), True)
+    with c4: nl(px.bar(df["Hour"].value_counts().sort_index().reset_index(name="C"), x="Hour", y="C", color="C", color_continuous_scale="Teal", text="C", title="By Hour").update_layout(coloraxis_showscale=False))
+    if "Status Category" in df.columns: pc(px.area(df.groupby(["YearMonth","Status Category"]).size().reset_index(name="C"), x="YearMonth", y="C", color="Status Category", color_discrete_map={"Done":"#00CC96","In Progress":"#FFA15A","To Do":"#636EFA"}, title="Status Category Trend").update_layout(xaxis_tickangle=-45))
+
+def s_bar(d, m, t):
+    p = d.groupby(["Priority", m]).size().reset_index(name="C").pivot(index="Priority", columns=m, values="C").fillna(0).reset_index().set_index("Priority").reindex(p_ord).reset_index()
+    f = go.Figure()
+    if "Met" in p: f.add_trace(go.Bar(name="Met", x=p["Priority"], y=p["Met"], marker_color="#00CC96", text=p["Met"].astype(int), textposition="inside"))
+    if "Breached" in p: f.add_trace(go.Bar(name="Breached", x=p["Priority"], y=p["Breached"], marker_color="#EF553B", text=p["Breached"].astype(int), textposition="inside"))
+    pc(f.update_layout(title=t, barmode="stack", legend=dict(orientation="h",y=1.1)))
+
+def s_trnd(d, m, t, c):
+    d["Mo"] = d["Created_dt"].dt.to_period("M").astype(str)
+    mg = d.groupby("Mo")[m].apply(lambda x: 100*(x=="Met").sum()/len(x)).reset_index(name="P").merge(d.groupby("Mo").size().reset_index(name="C"), on="Mo")
+    f = make_subplots(specs=[[{"secondary_y":True}]])
+    f.add_trace(go.Bar(x=mg["Mo"], y=mg["C"], name="Tickets", marker_color="#c7e8c7" if c=="#00CC96" else "#f5c6c6", opacity=0.6), secondary_y=False)
+    f.add_trace(go.Scatter(x=mg["Mo"], y=mg["P"], mode="lines+markers", name="Met %", line=dict(color=c)), secondary_y=True)
+    f.add_hline(y=80, line_dash="dash", line_color="orange", annotation_text="80% target", secondary_y=True)
+    pc(f.update_layout(title=t, xaxis_tickangle=-45, legend=dict(orientation="h",y=1.1)))
+
+def s_brc(d, m, gc, t, c):
+    nl(px.bar(d[d[m]=="Breached"].groupby(gc).size().sort_values().tail(15).reset_index(name="B"), x="B", y=gc, orientation="h", color="B", color_continuous_scale=c, text="B", title=t).update_layout(coloraxis_showscale=False), True)
+
+with t3:
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("FR SLA Met", f"{tfr_p:.1f}%"); c2.metric("FR SLA Breached", f"{100*(tfr['TFR_met']=='Breached').mean() if len(tfr) else 0:.1f}%", delta_color="inverse")
+    c3.metric("Res SLA Met", f"{ttr_p:.1f}%"); c4.metric("Res SLA Breached", f"{100*(ttr['TTR_met']=='Breached').mean() if len(ttr) else 0:.1f}%", delta_color="inverse")
+    c5.metric("Avg Act FR", f"{df.get('Act_TFR', pd.Series([0])).clip(lower=0).median():.1f} hrs" if "Act_TFR" in df else "N/A")
+    c6.metric("Avg Act Res", f"{df.get('Act_Res', pd.Series([0])).clip(lower=0).median():.1f} hrs" if "Act_Res" in df else "N/A")
     
-    with col1:
-        st.metric("Total tickets", total_tickets)
-    with col2:
-        st.metric("Open tickets", open_tickets, delta_color="inverse")
-    with col3:
-        st.metric("Resolved tickets", resolved_tickets)
-    with col4:
-        # Notice we pass the all_time_satisfaction here, so it never shrinks!
-        if satisfaction_col_name:
-            st.metric("Number of satisfaction", int(all_time_satisfaction))
-        else:
-            st.metric("Number of satisfaction", "No CSAT Data")
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1: pc(px.pie(tfr["TFR_met"].value_counts().reset_index(name="C"), names="TFR_met", values="C", hole=.5, color="TFR_met", color_discrete_map={"Met":"#00CC96","Breached":"#EF553B"}, title="FR SLA Met vs Breached").update_traces(pull=[0.05,0]))
+    with c2: pc(px.pie(ttr["TTR_met"].value_counts().reset_index(name="C"), names="TTR_met", values="C", hole=.5, color="TTR_met", color_discrete_map={"Met":"#00CC96","Breached":"#EF553B"}, title="Res SLA Met vs Breached").update_traces(pull=[0.05,0]))
+    
+    c3, c4 = st.columns(2)
+    with c3: s_bar(tfr, "TFR_met", "FR SLA by Priority")
+    with c4: s_bar(ttr, "TTR_met", "Res SLA by Priority")
+    
+    c5, c6 = st.columns(2)
+    with c5: s_trnd(tfr, "TFR_met", "FR SLA % Met Trend", "#00CC96")
+    with c6: s_trnd(ttr, "TTR_met", "Res SLA % Met Trend", "#636EFA")
+    
+    c7, c8 = st.columns(2)
+    with c7: s_brc(tfr, "TFR_met", "Assignee", "FR Breaches by Assignee", "Reds")
+    with c8: s_brc(ttr, "TTR_met", "Assignee", "Res Breaches by Assignee", "Oranges")
+    
+    c9, c10 = st.columns(2)
+    with c9: s_brc(tfr, "TFR_met", "Request Type", "FR Breaches by Req Type", "Reds")
+    with c10: s_brc(ttr, "TTR_met", "Request Type", "Res Breaches by Req Type", "Oranges")
 
-    st.markdown("---")
+    if "Act_Res" in df and len(df[df["Act_Res"]>0]):
+        rc = df[df["Act_Res"]>0]
+        rc = rc[rc["Act_Res"] <= rc["Act_Res"].quantile(0.95)]
+        ca, cb = st.columns(2)
+        with ca: pc(px.histogram(rc, x="Act_Res", nbins=50, color_discrete_sequence=["#636EFA"], title="Act Res Time Dist (hrs)"))
+        with cb: nl(px.box(rc[rc["Priority"].notna()], x="Priority", y="Act_Res", color="Priority", color_discrete_map=PCOL, title="Res Time by Priority"))
 
-    # 6. Visual Charts
-    left_chart_col, right_chart_col = st.columns(2)
+    with st.expander("🔎 View Breached Tickets"):
+        b_d = tfr[tfr["TFR_met"]=="Breached"] if st.radio("Type", ["FR", "Res"], horizontal=True)=="FR" else ttr[ttr["TTR_met"]=="Breached"]
+        st.dataframe(b_d[["Issue key","Summary","Status","Priority","Assignee","Created"]].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
 
-    with left_chart_col:
-        st.subheader("Ticket Stratification by Current Status")
-        status_distribution = df['Status'].value_counts()
-        st.bar_chart(status_distribution, color="#00d4ff")
-
-    with right_chart_col:
-        st.subheader("Priority Distribution Breakdown")
-        priority_distribution = df['Priority'].value_counts()
-        st.area_chart(priority_distribution, color="#daffde")
-
-    # 7. Data Table
-    st.subheader("📋 Unified Master Records Audit Logging")
-    st.dataframe(
-        df,
-        column_config={
-            "Issue key": st.column_config.TextColumn("Jira Key", help="Unique Identifier"),
-            "Summary": st.column_config.TextColumn("Issue Description", width="large"),
-            "Status": st.column_config.TextColumn("State"),
-            "Priority": st.column_config.TextColumn("Severity Rating")
-        },
-        use_container_width=True,
-        hide_index=True
-    )
-
-if __name__ == "__main__":
-    main()
+with t4:
+    if
