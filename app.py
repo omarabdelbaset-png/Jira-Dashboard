@@ -1,11 +1,16 @@
-import streamlit as st, pandas as pd, numpy as np, plotly.express as px, plotly.graph_objects as go
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 from jira import JIRA
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Facilities Team Dashboard", layout="wide")
-st_autorefresh(interval=60000, key="j_ref")
+# Increased to 5 minutes (300000 ms) to prevent memory overload
+st_autorefresh(interval=300000, key="j_ref")
 
 # --- CUSTOM BACKGROUND AND STYLING ---
 page_bg_img = '''
@@ -103,12 +108,14 @@ def fetch_data(jql):
         err = "Missing API Credentials."
     return df, err
 
-@st.cache_data(ttl=86400)
+# Added max_entries=1 to prevent memory leaks over time
+@st.cache_data(ttl=86400, max_entries=1)
 def load_vault():
     if os.path.exists("jira_history.csv"): return pd.read_csv("jira_history.csv", low_memory=False), None
     return fetch_data('project=SVF ORDER BY created DESC')
 
-@st.cache_data(ttl=55)
+# Increased ttl to match the 5-minute refresh and added max_entries=1
+@st.cache_data(ttl=300, max_entries=1)
 def load_live():
     return fetch_data('project=SVF AND updated >= -60d ORDER BY updated DESC')
 
@@ -151,10 +158,10 @@ if not os.path.exists("jira_history.csv"):
 m0 = dict(l=0, r=0, t=30, b=0)
 def pc(fig, out=False):
     if out: fig.update_traces(textposition="outside")
-    st.plotly_chart(fig.update_layout(margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
+    st.plotly_chart(fig.update_layout(margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'))
 def nl(fig, out=False):
     if out: fig.update_traces(textposition="outside")
-    st.plotly_chart(fig.update_layout(showlegend=False, margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
+    st.plotly_chart(fig.update_layout(showlegend=False, margin=m0, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'))
 
 st.sidebar.title("🔍 Filters")
 def ms(col): return st.sidebar.multiselect(col, sorted(df_raw[col].dropna().unique()), default=sorted(df_raw[col].dropna().unique()))
@@ -294,7 +301,7 @@ with t3:
     with st.expander("🔎 View Breached Tickets"):
         b_d = tfr[tfr["TFR_met"]=="Breached"] if st.radio("Type", ["FR", "Res"], horizontal=True)=="FR" else ttr[ttr["TTR_met"]=="Breached"]
         if not b_d.empty:
-            st.dataframe(b_d[["Issue key","Summary","Status","Priority","Assignee","Created"]].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
+            st.dataframe(b_d[["Issue key","Summary","Status","Priority","Assignee","Created"]].sort_values("Created", ascending=False), hide_index=True)
         else:
             st.info("No breached tickets found.")
 
@@ -342,7 +349,7 @@ with t5:
         
         with r2:
             st.write("") 
-            st.download_button("📥 Download Data", data=dp[cs].sort_values("Created", ascending=False).to_csv(index=False).encode('utf-8'), file_name="jira_export.csv", mime="text/csv", use_container_width=True)
+            st.download_button("📥 Download Data", data=dp[cs].sort_values("Created", ascending=False).to_csv(index=False).encode('utf-8'), file_name="jira_export.csv", mime="text/csv")
 
-        st.dataframe(dp[cs].sort_values("Created", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(dp[cs].sort_values("Created", ascending=False), hide_index=True)
         st.caption(f"Showing all {len(dp):,} matching records")
