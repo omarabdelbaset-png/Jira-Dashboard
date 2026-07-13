@@ -9,8 +9,8 @@ from jira import JIRA
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Facilities Team Dashboard", layout="wide")
-# Increased to 5 minutes (300000 ms) to prevent memory overload
-st_autorefresh(interval=300000, key="j_ref")
+# Fast 1-minute refresh restored
+st_autorefresh(interval=60000, key="j_ref")
 
 # --- CUSTOM BACKGROUND AND STYLING ---
 page_bg_img = '''
@@ -108,14 +108,14 @@ def fetch_data(jql):
         err = "Missing API Credentials."
     return df, err
 
-# Added max_entries=1 to prevent memory leaks over time
+# max_entries=1 protects your RAM from overflowing
 @st.cache_data(ttl=86400, max_entries=1)
 def load_vault():
     if os.path.exists("jira_history.csv"): return pd.read_csv("jira_history.csv", low_memory=False), None
     return fetch_data('project=SVF ORDER BY created DESC')
 
-# Increased ttl to match the 5-minute refresh and added max_entries=1
-@st.cache_data(ttl=300, max_entries=1)
+# TTL perfectly matches the 60-second refresh
+@st.cache_data(ttl=55, max_entries=1)
 def load_live():
     return fetch_data('project=SVF AND updated >= -60d ORDER BY updated DESC')
 
