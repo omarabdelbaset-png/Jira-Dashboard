@@ -4,3 +4,4 @@ numpy
 plotly
 jira
 streamlit-autorefresh
+starlette<0.38.0
